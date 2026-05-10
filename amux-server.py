@@ -6229,6 +6229,16 @@ def send_text(name: str, text: str) -> tuple[bool, str]:
         return False, "not running"
     lock = _get_send_lock(name)
     with lock:
+        # Refuse if the pane is at a bare shell prompt — Claude has exited
+        # and writing here turns PWA text into zsh commands. Triggered the
+        # "zsh: bad pattern: [11:03" loop when leaked RPROMPT timestamps from
+        # the previous Claude session got echoed back into the send buffer.
+        try:
+            guard_clean = _STRIP_ANSI.sub('', tmux_capture(name, 30))
+        except Exception:
+            guard_clean = ""
+        if guard_clean and _at_shell_prompt(guard_clean):
+            return False, "session is at bare shell prompt (Claude has exited); restart the session before sending text"
         try:
             t = tmux_name(name)
             # tmux send-keys -l has a ~500 char buffer limit; use load-buffer+paste-buffer for longer text
