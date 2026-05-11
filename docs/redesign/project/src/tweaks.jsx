@@ -79,6 +79,12 @@ function SettingsTab() {
   const [anthKey, setAnthKey] = React.useState('');
   const [googleKey, setGoogleKey] = React.useState('');
 
+  // Pushover
+  const [pushoverToken, setPushoverToken] = React.useState('');
+  const [pushoverUser,  setPushoverUser]  = React.useState('');
+  const [pushoverConfigured, setPushoverConfigured] = React.useState(false);
+  const [pushoverStatus, setPushoverStatus] = React.useState('');
+
   // Team modal
   const [teamModalOpen, setTeamModalOpen] = React.useState(false);
   const [inviteUrl, setInviteUrl] = React.useState('');
@@ -109,6 +115,7 @@ function SettingsTab() {
       .then(d => {
         if (!d) return;
         if (d.ANTHROPIC_API_KEY) setAnthKey('');
+        if (d.AMUX_PUSHOVER_TOKEN && d.AMUX_PUSHOVER_USER) setPushoverConfigured(true);
       })
       .catch(() => {});
     // Load health/version
@@ -153,6 +160,32 @@ function SettingsTab() {
       if (r.ok) { setGoogleKey(''); pushToast('Saved — server will reload', 'info'); }
       else pushToast('Save failed (' + r.status + ')', 'error');
     } catch (e) { pushToast('Error: ' + e.message, 'error'); }
+  }
+
+  async function savePushover() {
+    const body = {};
+    if (pushoverToken.trim()) body.AMUX_PUSHOVER_TOKEN = pushoverToken.trim();
+    if (pushoverUser.trim())  body.AMUX_PUSHOVER_USER  = pushoverUser.trim();
+    if (!Object.keys(body).length) return;
+    try {
+      const r = await fetch('/api/settings/env', {
+        method: 'PATCH', headers: { ...API_HEADERS, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (r.ok) {
+        setPushoverToken(''); setPushoverUser(''); setPushoverConfigured(true);
+        pushToast('Pushover saved — server will reload', 'info');
+      } else pushToast('Save failed (' + r.status + ')', 'error');
+    } catch (e) { pushToast('Error: ' + e.message, 'error'); }
+  }
+
+  async function testPushover() {
+    setPushoverStatus('Sending…');
+    try {
+      const r = await fetch('/api/pushover/test', { method: 'POST', headers: API_HEADERS });
+      const d = await r.json().catch(() => ({}));
+      setPushoverStatus(r.ok ? 'Sent ✓' : (d.error || `Failed (${r.status})`));
+    } catch (e) { setPushoverStatus('Error: ' + e.message); }
   }
 
   async function openTeamModal() {
@@ -293,6 +326,30 @@ function SettingsTab() {
             <button className="btn btn--primary" style={{minWidth:56, minHeight:36}} onClick={saveGoogle}>Save</button>
           </div>
           <div className="faint" style={{fontSize:11, marginTop:6}}>Saved to ~/.amux/server.env — survives restarts.</div>
+        </SettingsCard>
+
+        {/* ── Push Notifications ── */}
+        <SettingsCard
+          title="Push Notifications"
+          desc={pushoverConfigured
+            ? "Pushover configured — alerts + waiting-state pings"
+            : "Pushover credentials for alerts and waiting-state notifications"}>
+          <div style={{display:'flex', gap:8}}>
+            <input className="settings__field" type="password" placeholder="Pushover app token"
+              style={{flex:1}} value={pushoverToken} onChange={e => setPushoverToken(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && savePushover()} />
+          </div>
+          <div style={{display:'flex', gap:8, marginTop:8}}>
+            <input className="settings__field" type="password" placeholder="Pushover user key"
+              style={{flex:1}} value={pushoverUser} onChange={e => setPushoverUser(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && savePushover()} />
+            <button className="btn btn--primary" style={{minWidth:56, minHeight:36}} onClick={savePushover}>Save</button>
+          </div>
+          <div style={{display:'flex', gap:8, marginTop:8, alignItems:'center'}}>
+            <button className="btn btn--ghost" style={{minHeight:32}} onClick={testPushover}>Send test</button>
+            <span className="faint" style={{fontSize:11}}>{pushoverStatus}</span>
+          </div>
+          <div className="faint" style={{fontSize:11, marginTop:6}}>Get keys at pushover.net — saved to ~/.amux/server.env.</div>
         </SettingsCard>
 
         {/* ── Team & Cloud ── */}
