@@ -4403,10 +4403,12 @@ def _build_system_metrics() -> dict:
             "uptime_seconds": int(time.time() - _psutil.boot_time()),
             "hostname": socket.gethostname(),
             "psutil": True,
+            "python_executable": sys.executable,
         }
     except Exception:
         # Graceful fallback — subprocess-based (macOS/Linux)
-        sys_info: dict = {"hostname": socket.gethostname(), "psutil": False}
+        sys_info: dict = {"hostname": socket.gethostname(), "psutil": False,
+                          "python_executable": sys.executable}
         try:
             sys_info["load_avg"] = [round(x, 2) for x in os.getloadavg()]
         except AttributeError:
@@ -12370,22 +12372,25 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     </div>
     <div id="sched-rec-fields" style="display:none;">
       <div class="field-group">
-        <label class="field-label">Schedule expression <span class="field-optional">(optional — overrides dropdowns below)</span></label>
-        <input id="sched-expr" type="text" placeholder='e.g. "every 30m", "daily at 09:00", "0 9 * * 1-5"' autocomplete="off">
+        <label class="field-label">Cron / schedule expression <span class="field-optional">(paste from crontab.guru, or use builder below)</span></label>
+        <input id="sched-expr" type="text" placeholder='e.g. "0 9 * * 1-5", "every 30m", "daily at 09:00"' autocomplete="off" oninput="updateSchedExprUI()">
+        <div id="sched-expr-preview" style="font-size:0.72rem;margin-top:4px;min-height:1em;font-family:monospace;color:var(--dim);"></div>
         <div style="font-size:0.65rem;color:var(--dim);margin-top:3px;display:flex;gap:6px;flex-wrap:wrap;">
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every 30m'" style="color:var(--accent);">every 30m</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every 1h'" style="color:var(--accent);">every 1h</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every morning'" style="color:var(--accent);">every morning</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every evening'" style="color:var(--accent);">every evening</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='daily at 6pm'" style="color:var(--accent);">daily at 6pm</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every weekday at 9am'" style="color:var(--accent);">every weekday at 9am</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='weekly on monday at 08:00'" style="color:var(--accent);">weekly on monday</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='monthly on 1 at 9am'" style="color:var(--accent);">monthly on 1st</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='0 9 * * 1-5'" style="color:var(--accent);">cron: weekdays 9am</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every 30m';updateSchedExprUI()" style="color:var(--accent);">every 30m</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every 1h';updateSchedExprUI()" style="color:var(--accent);">every 1h</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every morning';updateSchedExprUI()" style="color:var(--accent);">every morning</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every evening';updateSchedExprUI()" style="color:var(--accent);">every evening</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='daily at 6pm';updateSchedExprUI()" style="color:var(--accent);">daily at 6pm</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every weekday at 9am';updateSchedExprUI()" style="color:var(--accent);">every weekday at 9am</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='weekly on monday at 08:00';updateSchedExprUI()" style="color:var(--accent);">weekly on monday</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='monthly on 1 at 9am';updateSchedExprUI()" style="color:var(--accent);">monthly on 1st</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='0 9 * * 1-5';updateSchedExprUI()" style="color:var(--accent);">cron: weekdays 9am</a>
+          <a href="https://crontab.guru/" target="_blank" rel="noopener" style="color:var(--accent);margin-left:auto;">crontab.guru ↗</a>
         </div>
       </div>
+      <div id="sched-rec-builder">
       <div class="field-group">
-        <label class="field-label">Repeat</label>
+        <label class="field-label">Repeat <span class="field-optional">(builder — used only when cron field is empty)</span></label>
         <select id="sched-recurrence" class="board-detail-session-select" style="width:100%;" onchange="updateSchedRecUI()">
           <option value="hourly">Hourly</option>
           <option value="daily" selected>Daily</option>
@@ -12408,6 +12413,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <div class="field-group" id="sched-monthday-field" style="display:none;">
         <label class="field-label">Day of month</label>
         <input id="sched-monthday" type="number" min="1" max="28" value="1" class="board-detail-session-select" style="width:100%;">
+      </div>
       </div>
     </div>
     <div class="field-group" style="margin-top:8px;">
@@ -16333,7 +16339,8 @@ async function _peekLoadSchedules() {
           nextRun + lastRun +
         '</span>' +
         '<div style="display:flex;gap:4px;margin-top:4px;">' +
-          '<button class="btn" style="font-size:0.7rem;padding:2px 8px;" onclick="event.stopPropagation();_peekToggleSchedule(\'' + esc(s.id) + '\',' + (s.enabled ? 0 : 1) + ')">' + (s.enabled ? 'Disable' : 'Enable') + '</button>' +
+          '<button class="btn" style="font-size:0.7rem;padding:2px 8px;" onclick="event.stopPropagation();openSchedModal(\'' + esc(s.id) + '\')">Edit</button>' +
+          '<button class="btn" style="font-size:0.7rem;padding:2px 8px;" onclick="event.stopPropagation();_peekToggleSchedule(\'' + esc(s.id) + '\',' + (s.enabled ? 0 : 1) + ')">' + (s.enabled ? 'Pause' : 'Resume') + '</button>' +
           '<button class="btn" style="font-size:0.7rem;padding:2px 8px;" onclick="event.stopPropagation();_peekRunSchedule(\'' + esc(s.id) + '\')">Run now</button>' +
           '<button class="btn" style="font-size:0.7rem;padding:2px 8px;color:var(--red);" onclick="event.stopPropagation();_peekDeleteSchedule(\'' + esc(s.id) + '\')">Delete</button>' +
         '</div>' +
@@ -16361,21 +16368,8 @@ async function _peekDeleteSchedule(id) {
   _peekLoadSchedules();
 }
 function _peekNewSchedule() {
-  const title = prompt('Schedule title:');
-  if (!title) return;
-  const command = prompt('Command to send to session:');
-  if (!command) return;
-  const expr = prompt('Cron expression (e.g. "0 9 * * 1" for Mon 9am), or leave blank for one-time:');
-  const body = {
-    title, session: peekSession, command, kind: 'tmux',
-    sched_type: expr ? 'recurring' : 'once',
-  };
-  if (expr) body.schedule_expr = expr;
-  else body.run_at = new Date().toISOString().slice(0, 16);
-  apiCall(API + '/api/schedules', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify(body)
-  }).then(() => _peekLoadSchedules());
+  if (!peekSession) return;
+  openSchedModal(null, { session: peekSession });
 }
 
 // ── Peek notes ──
@@ -23706,8 +23700,40 @@ function updateSchedKindUI() {
   const watchSection = document.getElementById('sched-watch');
   if (watchSection && kind === 'shell') { watchSection.checked = false; updateSchedWatchUI(); }
 }
-function openSchedModal(editId) {
+let _schedExprTimer = null;
+function updateSchedExprUI() {
+  const exprEl = document.getElementById('sched-expr');
+  const builder = document.getElementById('sched-rec-builder');
+  const preview = document.getElementById('sched-expr-preview');
+  if (!exprEl || !preview) return;
+  const v = (exprEl.value || '').trim();
+  if (builder) builder.style.display = v ? 'none' : '';
+  if (!v) { preview.textContent = ''; preview.style.color = 'var(--dim)'; return; }
+  preview.textContent = '…parsing';
+  preview.style.color = 'var(--dim)';
+  if (_schedExprTimer) clearTimeout(_schedExprTimer);
+  _schedExprTimer = setTimeout(async () => {
+    try {
+      const r = await fetch(API + '/api/schedules/preview', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ schedule_expr: v })
+      });
+      const j = await r.json();
+      if (j.ok) {
+        preview.textContent = '→ next run: ' + j.next_run.replace('T',' ') + (j.human ? '  (' + j.human + ')' : '');
+        preview.style.color = 'var(--green,#3fb950)';
+      } else {
+        preview.textContent = '✗ invalid expression';
+        preview.style.color = 'var(--red,#f97316)';
+      }
+    } catch(e) {
+      preview.textContent = '';
+    }
+  }, 300);
+}
+function openSchedModal(editId, opts) {
   _schedEditId = editId || null;
+  opts = opts || {};
   const overlay = document.getElementById('sched-overlay');
   // Populate session list
   const sel = document.getElementById('sched-session');
@@ -23741,11 +23767,16 @@ function openSchedModal(editId) {
     document.getElementById('sched-done-action').value = 'disable';
     document.getElementById('sched-watch-timeout').value = 120;
     document.getElementById('sched-save-btn').textContent = 'Save';
+    if (opts.session) {
+      // Pre-fill session when launched from per-session peek panel
+      try { sel.value = opts.session; } catch(e) {}
+    }
   }
   updateSchedTypeUI();
   updateSchedRecUI();
   updateSchedWatchUI();
   updateSchedKindUI();
+  updateSchedExprUI();
   overlay.style.display = 'flex';
   requestAnimationFrame(() => overlay.classList.add('active'));
   setTimeout(() => document.getElementById('sched-title').focus(), 50);
@@ -23785,7 +23816,15 @@ async function saveSchedModal() {
   const donePattern = document.getElementById('sched-done-pattern').value.trim();
   const doneAction = document.getElementById('sched-done-action').value;
   const watchTimeout = parseInt(document.getElementById('sched-watch-timeout').value) || 120;
-  const payload = { title, session, kind, command, sched_type: stype, recurrence: recurrence || null, run_at,
+  // When a cron/expr is provided, it is the source of truth — drop the builder fields
+  // so the saved schedule isn't a hybrid of both.
+  const effectiveStype = schedExpr ? 'recurring' : stype;
+  const effectiveRecurrence = schedExpr ? null : (recurrence || null);
+  const effectiveRunAt = schedExpr ? null : run_at;
+  const payload = { title, session, kind, command,
+                    sched_type: effectiveStype,
+                    recurrence: effectiveRecurrence,
+                    run_at: effectiveRunAt,
                     schedule_expr: schedExpr || null,
                     watch, done_pattern: donePattern || null, done_action: doneAction, watch_timeout: watchTimeout };
   const url = _schedEditId ? API + '/api/schedules/' + _schedEditId : API + '/api/schedules';
@@ -23795,6 +23834,8 @@ async function saveSchedModal() {
     await fetchSchedules();
     renderCalendar();
     renderScheduler();
+    // Also refresh per-session peek list if it is currently open
+    try { if (typeof _peekLoadSchedules === 'function' && peekSession) _peekLoadSchedules(); } catch(e) {}
     closeSchedModal();
   }
 }
@@ -26968,9 +27009,10 @@ function _metricsRender() {
   </div>`;
 
   if (!sys.psutil) {
+    const py = sys.python_executable || 'python3';
     html += `<div class="metrics-no-psutil">
       \u26A0\uFE0F Process-level CPU &amp; RAM per session requires psutil &mdash;
-      run <code>pip3 install psutil</code> then restart the server.
+      run <code>${esc(py)} -m pip install psutil</code> then restart the server.
       System metrics are shown via fallback commands.
     </div>`;
   }
@@ -33409,6 +33451,34 @@ class CCHandler(BaseHTTPRequestHandler):
                 self._json([dict(r) for r in rows])
                 return
 
+            # POST /api/schedules/preview — dry-run parse for live UI feedback
+            if method == "POST" and path == "/api/schedules/preview":
+                data = self._read_body()
+                expr = (data.get("schedule_expr") or "").strip()
+                if not expr:
+                    self._json({"ok": False, "error": "empty"}); return
+                nxt = _parse_next_run(expr)
+                if not nxt:
+                    self._json({"ok": False, "error": "invalid"}); return
+                human = None
+                try:
+                    secs = int((_dt.fromisoformat(nxt) - _dt.now()).total_seconds())
+                    if secs < 0:
+                        human = "now"
+                    elif secs < 60:
+                        human = f"in {secs}s"
+                    elif secs < 3600:
+                        human = f"in {secs // 60}m"
+                    elif secs < 86400:
+                        h, m = secs // 3600, (secs % 3600) // 60
+                        human = f"in {h}h {m}m" if m else f"in {h}h"
+                    else:
+                        d, h = secs // 86400, (secs % 86400) // 3600
+                        human = f"in {d}d {h}h" if h else f"in {d}d"
+                except Exception:
+                    pass
+                self._json({"ok": True, "next_run": nxt, "human": human}); return
+
             # POST /api/schedules
             if method == "POST" and path == "/api/schedules":
                 db = get_db()
@@ -33417,7 +33487,7 @@ class CCHandler(BaseHTTPRequestHandler):
                 sid = _next_issue_id("SCHED")
                 stype = data.get("sched_type", "once")
                 schedule_expr = (data.get("schedule_expr") or "").strip()
-                run_at = data.get("run_at", _dt.now().strftime("%Y-%m-%dT%H:%M"))
+                run_at = data.get("run_at") or _dt.now().strftime("%Y-%m-%dT%H:%M")
                 sched = {
                     "id": sid, "title": data.get("title", ""),
                     "session": data.get("session", ""),
