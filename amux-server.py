@@ -11368,6 +11368,29 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     .jrnl-gallery { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
   }
 
+  /* ─── Tweaks (Accent / Density / Animations) ─── */
+  /* Accent override — beats theme defaults via source order + higher spec */
+  body[data-accent="indigo"]  { --accent: #7c9eff; }
+  body[data-accent="emerald"] { --accent: #3fb950; }
+  body[data-accent="amber"]   { --accent: #ffb84d; }
+  body[data-accent="rose"]    { --accent: #ff6f8d; }
+  /* Density — global scale of paddings/gaps via custom props */
+  :root { --density-scale: 1; }
+  body[data-density="spacious"] { --density-scale: 1.15; }
+  body[data-density="dense"]    { --density-scale: 0.82; }
+  body[data-density="spacious"] .card { padding: 14px; }
+  body[data-density="dense"] .card    { padding: 7px 9px; }
+  body[data-density="spacious"] .tab-bar button { padding: 9px 14px; }
+  body[data-density="dense"] .tab-bar button    { padding: 4px 8px; font-size: 0.78rem; }
+  body[data-density="spacious"] .settings-row { padding: 8px 0; }
+  body[data-density="dense"] .settings-row    { padding: 3px 0; }
+  /* Animations off — kill all transitions/animations globally */
+  body[data-anim="off"], body[data-anim="off"] * {
+    transition: none !important;
+    animation-duration: 0s !important;
+    animation-iteration-count: 1 !important;
+  }
+
 </style>
 </head>
 <body>
@@ -11542,6 +11565,33 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             <span style="font-size:0.85rem;">Dense mode</span>
             <label class="theme-toggle">
               <input type="checkbox" id="theme-dense-checkbox" onchange="toggleDense(this.checked)">
+              <span class="theme-track"><span class="theme-thumb"></span></span>
+            </label>
+          </div>
+          <div class="settings-row" style="justify-content:space-between;align-items:center;margin-top:8px;">
+            <span style="font-size:0.85rem;">Accent</span>
+            <select id="theme-accent-select" onchange="setAccent(this.value)"
+              style="background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;font-size:0.8rem;min-width:152px;cursor:pointer;">
+              <option value="default">Theme default</option>
+              <option value="indigo">Indigo</option>
+              <option value="emerald">Emerald</option>
+              <option value="amber">Amber</option>
+              <option value="rose">Rose</option>
+            </select>
+          </div>
+          <div class="settings-row" style="justify-content:space-between;align-items:center;margin-top:8px;">
+            <span style="font-size:0.85rem;">Density</span>
+            <select id="theme-density-select" onchange="setDensity(this.value)"
+              style="background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;font-size:0.8rem;min-width:152px;cursor:pointer;">
+              <option value="spacious">Spacious</option>
+              <option value="comfortable">Cozy</option>
+              <option value="dense">Dense</option>
+            </select>
+          </div>
+          <div class="settings-row" style="justify-content:space-between;align-items:center;margin-top:8px;">
+            <span style="font-size:0.85rem;">Animations</span>
+            <label class="theme-toggle">
+              <input type="checkbox" id="theme-animations-checkbox" onchange="toggleAnimations(this.checked)" checked>
               <span class="theme-track"><span class="theme-thumb"></span></span>
             </label>
           </div>
@@ -13167,6 +13217,9 @@ function _themeState() {
     light: localStorage.getItem('amux_theme_light') === '1',
     scanlines: localStorage.getItem('amux_theme_scanlines') === '1',
     dense: localStorage.getItem('amux_theme_dense') === '1',
+    accent: localStorage.getItem('amux_accent') || 'default',
+    density: localStorage.getItem('amux_density') || 'comfortable',
+    animations: localStorage.getItem('amux_animations') !== '0',  // default ON
   };
 }
 function _applyTheme(state) {
@@ -13205,6 +13258,18 @@ function _applyTheme(state) {
   const denseCb = document.getElementById('theme-dense-checkbox');
   if (denseCb) denseCb.checked = state.dense;
 
+  // Tweaks: accent override, density scale, animations toggle
+  if (state.accent && state.accent !== 'default') body.setAttribute('data-accent', state.accent);
+  else body.removeAttribute('data-accent');
+  body.setAttribute('data-density', state.density || 'comfortable');
+  body.setAttribute('data-anim', state.animations ? 'on' : 'off');
+  const accSel = document.getElementById('theme-accent-select');
+  if (accSel) accSel.value = state.accent;
+  const denSel = document.getElementById('theme-density-select');
+  if (denSel) denSel.value = state.density;
+  const animCb = document.getElementById('theme-animations-checkbox');
+  if (animCb) animCb.checked = state.animations;
+
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) {
     let c = '#0d1117';
@@ -13233,6 +13298,19 @@ function toggleScanlines(checked) {
 }
 function toggleDense(checked) {
   localStorage.setItem('amux_theme_dense', checked ? '1' : '0');
+  _applyTheme();
+}
+function setAccent(v) {
+  if (!v || v === 'default') localStorage.removeItem('amux_accent');
+  else localStorage.setItem('amux_accent', v);
+  _applyTheme();
+}
+function setDensity(v) {
+  localStorage.setItem('amux_density', v || 'comfortable');
+  _applyTheme();
+}
+function toggleAnimations(checked) {
+  localStorage.setItem('amux_animations', checked ? '1' : '0');
   _applyTheme();
 }
 (function initTheme() {
@@ -26350,6 +26428,47 @@ async function _handleDeeplink(hash) {
 }
 // On page load
 _handleDeeplink(location.hash);
+// Embedded mode (iframed from /redesign) + ?view=X auto-switch
+(function _amuxEmbeddedBoot(){
+  try {
+    var p = new URLSearchParams(location.search);
+    var embedded = p.get('embedded') === '1';
+    var view = p.get('view');
+    if (embedded) {
+      document.documentElement.setAttribute('data-embedded', '1');
+      // Skip the onboarding walkthrough when embedded inside the redesign —
+      // the host shell already provides primary navigation.
+      try { localStorage.setItem('amux_walkthrough_done', '1'); } catch(e) {}
+      var st = document.createElement('style');
+      st.textContent = (
+        "html[data-embedded='1'] .tab-bar-outer," +
+        "html[data-embedded='1'] #chrome-tabs-bar," +
+        "html[data-embedded='1'] #chrome-tab-frames," +
+        "html[data-embedded='1'] #no-apikey-banner," +
+        "html[data-embedded='1'] #org-banner," +
+        "html[data-embedded='1'] #org-invite-banner," +
+        "html[data-embedded='1'] #wt-overlay," +
+        "html[data-embedded='1'] .header-row { display: none !important; }" +
+        "html[data-embedded='1'] body { padding-top: 0 !important; --chrome-tab-h: 0px !important; }"
+      );
+      document.head.appendChild(st);
+    }
+    if (view) {
+      // Poll for switchView to be defined (legacy dashboard's inline scripts
+      // run after this snippet). Try for up to 5 seconds.
+      var tries = 0;
+      var iv = setInterval(function(){
+        tries++;
+        if (typeof window.switchView === 'function') {
+          clearInterval(iv);
+          try { window.switchView(view); } catch(e){}
+        } else if (tries > 50) {
+          clearInterval(iv);
+        }
+      }, 100);
+    }
+  } catch(e) {}
+})();
 // Restore peek state from sessionStorage (survives refresh)
 try {
   const _ps = JSON.parse(sessionStorage.getItem('peekState') || 'null');
@@ -31449,9 +31568,29 @@ class CCHandler(BaseHTTPRequestHandler):
         if not self._check_auth(method, path):
             return
 
-        # GET /
-        if method == "GET" and path == "/":
+        # GET / or /legacy — main dashboard.
+        #   /          → redesign by default (Claude Design refresh, 2026-05-11)
+        #              fallback to legacy if ?legacy=1 or query/hash specifies a legacy-only path
+        #   /legacy    → always the original DASHBOARD_HTML
+        if method == "GET" and path in ("/", "/legacy"):
             import json as _json
+            from urllib.parse import parse_qsl as _parse_qsl
+            raw_qs = urlparse(self.path).query
+            qs = dict(_parse_qsl(raw_qs)) if raw_qs else {}
+            want_redesign = (
+                path == "/"
+                and qs.get("legacy", "0") not in ("1", "true", "yes")
+                and qs.get("view") is None  # legacy view links keep legacy
+                and qs.get("path") is None  # legacy file deeplinks keep legacy
+            )
+            if want_redesign:
+                # 302 to /redesign so cookies + service-worker scope behave consistently
+                self.send_response(302)
+                self._cors()
+                self.send_header("Location", "/redesign")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             _user_email = self.headers.get("X-Amux-User-Email", "")
             _user_id = self.headers.get("X-Amux-User-Id", "")
             page = DASHBOARD_HTML.replace(
@@ -31488,6 +31627,56 @@ class CCHandler(BaseHTTPRequestHandler):
         # GET /release-notes — standalone SEO-indexable release notes page
         if method == "GET" and path == "/release-notes":
             return self._html(RELEASE_NOTES_HTML)
+
+        # GET /redesign — Claude Design handoff preview, bundled from docs/redesign/project/
+        if method == "GET" and path == "/redesign":
+            import json as _json
+            base = Path(__file__).parent / "docs" / "redesign" / "project"
+            if not base.exists():
+                return self._html("<h2>Redesign assets not found at docs/redesign/project/</h2><p>Run from a checkout that includes the handoff bundle.</p>")
+            css_files = ["src/tokens.css", "src/base.css", "src/components.css", "src/app.css"]
+            jsx_files = [
+                "src/tweaks-panel.jsx", "src/store.jsx", "src/icons.jsx",
+                "src/sessions.jsx", "src/peek.jsx", "src/palette.jsx",
+                "src/secondary.jsx", "src/shell.jsx", "src/workspace-tabs.jsx",
+                "src/tweaks.jsx", "src/walkthrough.jsx", "src/app.jsx",
+            ]
+            css_parts = []
+            for f in css_files:
+                p = base / f
+                if p.exists():
+                    css_parts.append(f"/* === {f} === */\n" + p.read_text(encoding="utf-8"))
+            jsx_parts = []
+            for f in jsx_files:
+                p = base / f
+                if p.exists():
+                    jsx_parts.append(f"// === {f} ===\n" + p.read_text(encoding="utf-8"))
+            css_blob = "\n".join(css_parts)
+            jsx_blob = "\n".join(jsx_parts)
+            page = (
+                "<!doctype html>\n"
+                "<html lang=\"en\">\n<head>\n"
+                "<meta charset=\"utf-8\" />\n"
+                "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\" />\n"
+                "<meta name=\"theme-color\" content=\"#0a0a0b\" />\n"
+                "<title>amux — Redesign Preview</title>\n"
+                "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\" />\n"
+                "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin />\n"
+                "<link href=\"https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap\" rel=\"stylesheet\" />\n"
+                "<style>\n" + css_blob + "\n</style>\n"
+                "<script>window._AMUX_AUTH_TOKEN=" + _json.dumps(AUTH_TOKEN) + ";</script>\n"
+                "</head>\n<body>\n<div id=\"root\"></div>\n"
+                "<script crossorigin src=\"https://unpkg.com/react@18.3.1/umd/react.development.js\"></script>\n"
+                "<script crossorigin src=\"https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js\"></script>\n"
+                "<script src=\"https://unpkg.com/@babel/standalone@7.29.0/babel.min.js\"></script>\n"
+                "<script type=\"text/babel\" data-presets=\"react\">\n"
+                + jsx_blob +
+                "\nfunction Root(){return <><App /><Walkthrough /></>;}\n"
+                "const root = ReactDOM.createRoot(document.getElementById('root'));\n"
+                "root.render(<Root />);\n"
+                "</script>\n</body>\n</html>\n"
+            )
+            return self._html(page)
 
         # GET /api/release-notes — paginated JSON from docs/release-notes/notes.json
         if method == "GET" and path.startswith("/api/release-notes"):
