@@ -132,7 +132,7 @@ function App() {
   return (
     <div className="app" data-sidebar={sidebarPos} data-nav={navMode}>
       {navMode === 'sidebar' && (
-        <Sidebar collapsed={collapsed} setCollapsed={setCollapsed} tab={tab} setTab={setTab} openTweaks={() => setTab('settings')} openPalette={() => setPaletteOpen(true)} />
+        <Sidebar collapsed={collapsed} setCollapsed={setCollapsed} tab={tab} setTab={setTab} openTweaks={() => setTab('settings')} openPalette={() => setPaletteOpen(true)} onNewSession={() => setNewOpen(true)} />
       )}
       <main className="main">
         <WorkspaceTabs
@@ -147,7 +147,7 @@ function App() {
           openPalette={() => setPaletteOpen(true)}
         />
         {navMode === 'tabs' && <ViewTabs tab={tab} setTab={setTab} />}
-        <Topbar tab={tab} onMenu={() => setCollapsed(false)} openPalette={() => setPaletteOpen(true)} />
+        <Topbar tab={tab} onMenu={() => setCollapsed(false)} openPalette={() => setPaletteOpen(true)} onNewSession={() => setNewOpen(true)} />
         {renderTab()}
       </main>
 
