@@ -31665,7 +31665,8 @@ class CCHandler(BaseHTTPRequestHandler):
         auth = self.headers.get("Authorization", "")
         if auth == f"Bearer {AUTH_TOKEN}":
             return True
-        token_qs = parse_qs(urlparse(self.path).query).get("_token", [""])[0]
+        _qs = parse_qs(urlparse(self.path).query)
+        token_qs = _qs.get("_token", [""])[0] or _qs.get("token", [""])[0]
         if token_qs == AUTH_TOKEN:
             return True
         self.send_response(401)
