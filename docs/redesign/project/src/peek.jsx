@@ -29,16 +29,51 @@ function _ccLinkify(text) {
 function _ccStripAnsi(text) {
   return String(text)
     .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
-    .replace(/\x1b\][^\x07]*\x07/g, '');
+    .replace(/\x1b\][^\x07]*\x07/g, '')
+    .replace(/\x1b[=>]/g, '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+}
+const _CC_RULE_RE      = /^[\s]*[─━═━–—_]{6,}[\s]*$/;
+const _CC_RULE_WORD_RE = /^[\s]*[─━═━–—_]{2,}\s+(.+?)\s+[─━═━–—_]{2,}[\s]*$/;
+const _CC_TOOL_HEAD_RE = /^\s*[●•▶○⏺]\s+([A-Za-z][\w.\-]*)\(([\s\S]*)\)\s*$/;
+const _CC_TOOL_HEAD_RUN_RE = /^\s*[●•▶○⏺]\s+([A-Za-z][\w.\-]*)\s*\.\.\.\s*$/;
+const _CC_TOOL_CONT_RE = /^\s*(?:⎿|└|⌐)\s?(.*)$/;
+const _CC_INDENT_RE    = /^(?:    |\t|  ⎿|  └|  ⌐)/;
+const _CC_USER_RE      = /^\s*[❯>]\s+(\S.*)$/;
+const _CC_STATUS_RE    = /^\s*[✻✺·]\s+([^\n]+)$/;
+const _CC_FOOTER_RE    = /^\s*[➜→]\s+\S/;
+const _CC_MODE_RE      = /^\s*[⏵▶]{1,2}\s+\S/;
+const _CC_CURLAT_RE    = /^\s*current:\s.*latest:/i;
+function _ccIsTuiFrameLine(line) {
+  if (!line.trim()) return true;
+  if (_CC_RULE_RE.test(line) || _CC_RULE_WORD_RE.test(line)) return true;
+  if (/^\s*[❯>]\s*$/.test(line)) return true;
+  if (_CC_FOOTER_RE.test(line) || _CC_MODE_RE.test(line) || _CC_CURLAT_RE.test(line)) return true;
+  if (/^\s*\d[\d,]*\s+tokens\b/i.test(line)) return true;
+  return false;
+}
+/* Strip the bottom-of-buffer TUI frame (box-drawing rule, empty prompt,
+   footer status with ➜/⏵⏵/current/latest/tokens). These lines describe
+   the live UI chrome, not the transcript, and are noise once we already
+   render structured content. */
+function _ccTrimTuiFrame(lines) {
+  let end = lines.length;
+  while (end > 0) {
+    const line = lines[end - 1].replace(/\r$/, '');
+    if (_ccIsTuiFrameLine(line)) { end--; continue; }
+    break;
+  }
+  return lines.slice(0, end);
 }
 function renderCCStream(rawText) {
   const text = rawText == null ? '' : String(rawText);
   if (!text.trim()) return '<div class="cc-stream"></div>';
-  const lines = text.split('\n');
+  let lines = text.split('\n');
+  /* Cap to last ~4000 lines for perf — long sessions blow up the DOM. */
+  if (lines.length > 4000) lines = lines.slice(-4000);
+  lines = _ccTrimTuiFrame(lines);
+  if (!lines.length) return '<div class="cc-stream"></div>';
   const out = ['<div class="cc-stream">'];
-  const toolHead = /^[\s]*[●•▶○]\s+([A-Za-z][\w.\-]*)\(([\s\S]*)\)\s*$/;
-  const toolCont = /^\s*(?:⎿|└|⌐)\s?(.*)$/;
-  const indented = /^(?:    |\t|  ⎿|  └)/;
   let i = 0;
   let consecutiveBlanks = 0;
   while (i < lines.length) {
@@ -50,43 +85,79 @@ function renderCCStream(rawText) {
       continue;
     }
     consecutiveBlanks = 0;
-    const userM = /^>\s+(\S.*)$/.exec(line);
+    /* Box-drawing section divider: collapse consecutive rule lines into one. */
+    if (_CC_RULE_RE.test(line) || _CC_RULE_WORD_RE.test(line)) {
+      let j = i;
+      let label = '';
+      while (j < lines.length) {
+        const l = lines[j].replace(/\r$/, '');
+        if (!l.trim()) { j++; continue; }
+        const m = _CC_RULE_WORD_RE.exec(l);
+        if (m && !label) label = m[1];
+        if (_CC_RULE_RE.test(l) || _CC_RULE_WORD_RE.test(l)) { j++; continue; }
+        break;
+      }
+      if (label) {
+        out.push('<div class="cc-rule cc-rule--label"><span>' + _ccEsc(label) + '</span></div>');
+      } else {
+        out.push('<div class="cc-rule" aria-hidden="true"></div>');
+      }
+      i = j;
+      continue;
+    }
+    const userM = _CC_USER_RE.exec(line);
     if (userM) {
       out.push('<div class="cc-userpill"><span class="chev">›</span>'
         + _ccLinkify(userM[1]) + '</div>');
       i++;
       continue;
     }
-    if (/^[\s]*✻\s/.test(line)) {
-      const rest = line.replace(/^\s*✻\s*/, '');
+    const stM = _CC_STATUS_RE.exec(line);
+    if (stM) {
       out.push('<div class="cc-status"><span class="star">✻</span>'
-        + _ccLinkify(rest) + '</div>');
+        + _ccLinkify(stM[1]) + '</div>');
       i++;
       continue;
     }
-    const tm = toolHead.exec(line);
+    /* Tool head — Name(args) or Name… (running, no args) */
+    let tm = _CC_TOOL_HEAD_RE.exec(line);
+    let runningHead = false;
+    if (!tm) {
+      const rm = _CC_TOOL_HEAD_RUN_RE.exec(line);
+      if (rm) { tm = [line, rm[1], '']; runningHead = true; }
+    }
     if (tm) {
       const name = tm[1];
       const args = tm[2];
       const contLines = [];
       let j = i + 1;
+      let sawError = false;
       while (j < lines.length) {
         const nxt = lines[j].replace(/\r$/, '');
         if (!nxt.trim()) break;
-        const cm = toolCont.exec(nxt);
-        if (cm) { contLines.push(cm[1]); j++; continue; }
-        if (indented.test(nxt)) { contLines.push(nxt.replace(/^\s+/, '')); j++; continue; }
+        const cm = _CC_TOOL_CONT_RE.exec(nxt);
+        if (cm) {
+          if (/error|failed|exit\s+code/i.test(cm[1])) sawError = true;
+          contLines.push(cm[1]); j++; continue;
+        }
+        if (_CC_INDENT_RE.test(nxt)) { contLines.push(nxt.replace(/^\s+/, '')); j++; continue; }
         break;
       }
+      const state = runningHead ? 'run' : (sawError ? 'err' : 'ok');
       let head = '<div class="cc-tool"><div class="cc-tool__head">'
-        + '<span class="cc-dot" data-state="ok" aria-hidden="true"></span>'
-        + '<span><span class="cc-tool__name">' + _ccEsc(name) + '</span>'
-        + '<span class="cc-tool__args">'
-        + '<span class="arg-paren">(</span>' + _ccLinkify(args) + '<span class="arg-paren">)</span>'
-        + '</span></span></div>';
+        + '<span class="cc-dot" data-state="' + state + '" aria-hidden="true"></span>'
+        + '<span class="cc-tool__title"><span class="cc-tool__name">' + _ccEsc(name) + '</span>';
+      if (args) {
+        head += '<span class="cc-tool__args">'
+          + '<span class="arg-paren">(</span>' + _ccLinkify(args) + '<span class="arg-paren">)</span>'
+          + '</span>';
+      } else if (runningHead) {
+        head += '<span class="cc-tool__args cc-tool__args--run">…</span>';
+      }
+      head += '</span></div>';
       if (contLines.length) {
         head += '<div class="cc-tool__result">'
-          + '<span class="cc-tool__cont" aria-hidden="true">└</span>'
+          + '<span class="cc-tool__cont" aria-hidden="true">⎿</span>'
           + '<div class="cc-tool__body"><div class="cc-lines">'
           + contLines.map(l => '<span class="ln">' + _ccLinkify(l) + '</span>').join('')
           + '</div></div></div>';
@@ -143,7 +214,7 @@ function PeekPanel({ name, onClose }) {
     if (tab !== 'output' || !s?.name) return;
     let cancelled = false;
     setOutputLoading(true);
-    fetch(`/api/sessions/${encodeURIComponent(s.name)}/peek?full=1`, { headers: API_HEADERS })
+    fetch(`/api/sessions/${encodeURIComponent(s.name)}/peek?lines=600`, { headers: API_HEADERS })
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then(j => { if (!cancelled) setFullOutput(j?.output || ''); })
       .catch(() => { /* network blip — keep previous output */ })

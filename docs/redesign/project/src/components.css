@@ -249,9 +249,11 @@
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--err) 22%, transparent);
 }
 @keyframes ccSpin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+.cc-stream .cc-tool__title { min-width: 0; flex: 1; line-height: 1.45; }
 .cc-stream .cc-tool__name { font-weight: 600; color: var(--text); }
-.cc-stream .cc-tool__args { color: var(--text-dim); word-break: break-all; }
+.cc-stream .cc-tool__args { color: var(--text-dim); word-break: break-all; margin-left: 2px; }
 .cc-stream .cc-tool__args .arg-paren { color: var(--text-dim); opacity: 0.6; }
+.cc-stream .cc-tool__args--run { color: var(--accent); margin-left: 6px; letter-spacing: 2px; }
 .cc-stream .cc-tool__result {
   display: grid; grid-template-columns: 9px 1fr; gap: 8px;
   margin: 2px 0 0 2px;
@@ -275,7 +277,30 @@
 }
 .cc-stream .cc-status .star { color: var(--accent); margin-right: 6px; }
 
-.cc-stream .cc-blank { display: block; height: .55em; }
+.cc-stream .cc-blank { display: block; height: .45em; }
+
+.cc-stream .cc-rule {
+  display: block; height: 1px; margin: 12px 0 8px;
+  background: linear-gradient(to right,
+    transparent 0,
+    color-mix(in oklab, var(--border) 80%, transparent) 20%,
+    color-mix(in oklab, var(--border) 80%, transparent) 80%,
+    transparent 100%);
+  border: 0;
+}
+.cc-stream .cc-rule--label {
+  display: flex; align-items: center; gap: 10px;
+  height: auto; background: transparent; margin: 14px 0 10px;
+  color: var(--text-dim); font-size: 11px; letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.cc-stream .cc-rule--label::before,
+.cc-stream .cc-rule--label::after {
+  content: "";
+  flex: 1; height: 1px;
+  background: color-mix(in oklab, var(--border) 80%, transparent);
+}
+.cc-stream .cc-rule--label span { padding: 0 4px; }
 
 .cc-stream mark {
   background: color-mix(in oklab, var(--warn) 60%, transparent);
