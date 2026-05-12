@@ -167,7 +167,7 @@ def _posthog_emit(event: str, props: dict = None, distinct_id: str = ""):
 _PUBLIC_PATHS = frozenset({"/", "/manifest.json", "/sw.js", "/icon.svg", "/icon.png",
                            "/icon-192.png", "/icon-512.png", "/ca", "/release-notes",
                            "/api/release-notes", "/api/calendar.ics"})
-_PUBLIC_PREFIXES = ("/s/", "/api/share/", "/invite/", "/proxy/", "/api/branding/")
+_PUBLIC_PREFIXES = ("/s/", "/api/share/", "/invite/", "/proxy/", "/api/branding/", "/api/webhooks/")
 
 CC_LOGS.mkdir(parents=True, exist_ok=True)
 CC_MEMORY.mkdir(parents=True, exist_ok=True)
@@ -1427,6 +1427,31 @@ def _push_alert(alert_type: str, session: str, message: str):
         _sse_alerts.append({"type": alert_type, "session": session, "message": message, "ts": int(time.time())})
         if len(_sse_alerts) > 50:
             _sse_alerts = _sse_alerts[-50:]
+    _send_pushover(f"amux — {alert_type}", message)
+
+
+def _send_pushover(title: str, message: str, priority: int = 0) -> None:
+    """Fire-and-forget Pushover notification in a background thread."""
+    token = os.environ.get("AMUX_PUSHOVER_TOKEN", "")
+    user  = os.environ.get("AMUX_PUSHOVER_USER", "")
+    if not token or not user:
+        return
+    def _send():
+        try:
+            import urllib.request, urllib.parse
+            data = urllib.parse.urlencode({
+                "token":    token,
+                "user":     user,
+                "title":    title,
+                "message":  message,
+                "priority": priority,
+            }).encode()
+            urllib.request.urlopen(
+                "https://api.pushover.net/1/messages.json", data, timeout=10
+            )
+        except Exception as e:
+            slog(f"[pushover] send failed: {e}")
+    threading.Thread(target=_send, daemon=True).start()
 
 
 def _read_jsonl_tail(filepath: Path, max_bytes: int = 5_000_000) -> list:
@@ -4403,10 +4428,12 @@ def _build_system_metrics() -> dict:
             "uptime_seconds": int(time.time() - _psutil.boot_time()),
             "hostname": socket.gethostname(),
             "psutil": True,
+            "python_executable": sys.executable,
         }
     except Exception:
         # Graceful fallback — subprocess-based (macOS/Linux)
-        sys_info: dict = {"hostname": socket.gethostname(), "psutil": False}
+        sys_info: dict = {"hostname": socket.gethostname(), "psutil": False,
+                          "python_executable": sys.executable}
         try:
             sys_info["load_avg"] = [round(x, 2) for x in os.getloadavg()]
         except AttributeError:
@@ -4745,6 +4772,15 @@ def list_sessions() -> list:
             elif status == "" and prev in ("active", "waiting", "idle"):
                 # Session went from running to not running
                 threading.Thread(target=_complete_session_board_issue, args=(name,), daemon=True).start()
+            # Pushover notification when session needs input
+            if status == "waiting" and prev in ("active", ""):
+                _cfg_notif = parse_env_file(CC_SESSIONS / f"{name}.env")
+                _auto_cont = _cfg_notif.get("CC_AUTO_CONTINUE", "") in ("1", "true", "yes")
+                if not _auto_cont:
+                    threading.Thread(target=_send_pushover, args=(
+                        f"amux — {name} needs input",
+                        "Session is waiting for your response.",
+                    ), daemon=True).start()
             _session_prev_status[name] = status if running else ""
             # Filter for intelligible content lines
             intelligible = []
@@ -7439,6 +7475,599 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   body.light #file-overlay .file-overlay-body.file-pdf,
   body.light #file-overlay .file-overlay-body.markdown { background: var(--bg); color: var(--text); }
   body.light #file-overlay .file-overlay-body.file-video { background: #000; }
+
+  /* ════════════════════════════════════════════════════════════════════
+     ALTERNATIVE THEMES — toggle via body.theme-<name> class
+     Default (no class) = original GitHub-dark palette.
+     light = orthogonal modifier; only quiet+glass support it.
+     scanlines = phosphor extra. dense = trade extra.
+     ════════════════════════════════════════════════════════════════════ */
+
+  /* ── Theme: Quiet Modern (Linear / Vercel / Geist) ─────────────────── */
+  body.theme-quiet {
+    --bg: #0a0a0a;
+    --card: #111111;
+    --border: #262626;
+    --text: #fafafa;
+    --dim: #a1a1aa;
+    --text2: #a1a1aa;
+    --accent: #5e6ad2;
+    --green: #4ade80;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --cyan: #67e8f9;
+    --quiet-hover: #18181b;
+    --quiet-ring: rgba(94,106,210,0.28);
+    --quiet-accent-fg: #ffffff;
+    color-scheme: dark;
+    font-family: "Inter","InterVariable",-apple-system,BlinkMacSystemFont,"Segoe UI","SF Pro Text",Helvetica,Arial,sans-serif;
+    font-feature-settings: "cv11","ss01","ss03","calt","kern";
+    letter-spacing: -0.005em;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body.theme-quiet.light {
+    --bg: #ffffff;
+    --card: #fafafa;
+    --border: #e4e4e7;
+    --text: #0a0a0a;
+    --dim: #71717a;
+    --text2: #71717a;
+    --green: #16a34a;
+    --red: #dc2626;
+    --yellow: #b45309;
+    --cyan: #0891b2;
+    --quiet-hover: #f4f4f5;
+    --quiet-ring: rgba(94,106,210,0.20);
+    color-scheme: light;
+  }
+  body.theme-quiet h1 { font-weight: 600; letter-spacing: -0.02em; }
+  body.theme-quiet h2, body.theme-quiet h3 { font-weight: 600; letter-spacing: -0.015em; }
+  body.theme-quiet .card-preview, body.theme-quiet .card-preview-lines,
+  body.theme-quiet .overlay-body, body.theme-quiet .file-overlay-body {
+    font-family: "JetBrains Mono","SF Mono","Fira Code","Cascadia Code",ui-monospace,Menlo,Consolas,monospace;
+  }
+  body.theme-quiet .btn {
+    background: var(--card); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 7px 12px; font-weight: 500; font-size: 0.85rem; box-shadow: none;
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+  }
+  body.theme-quiet .btn:hover { background: var(--quiet-hover); border-color: #2e2e30; }
+  body.theme-quiet.light .btn:hover { background: var(--quiet-hover); border-color: #d4d4d8; }
+  body.theme-quiet .btn:active { background: var(--border); }
+  body.theme-quiet .btn:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--quiet-ring); }
+  body.theme-quiet .btn.primary {
+    background: var(--accent); border-color: var(--accent); color: var(--quiet-accent-fg);
+    background-image: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(0,0,0,0.06));
+  }
+  body.theme-quiet .btn.primary:hover { background-color: #6e79d8; border-color: #6e79d8; }
+  body.theme-quiet .btn.primary:active { background-color: #4f5bc4; }
+  body.theme-quiet .btn.danger { background: transparent; border-color: var(--border); color: var(--red); }
+  body.theme-quiet .btn.danger:hover { background: rgba(248,113,113,0.08); border-color: var(--red); }
+  body.theme-quiet.light .btn.danger:hover { background: rgba(220,38,38,0.06); }
+  body.theme-quiet .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: none;
+    transition: background-color 120ms ease, border-color 120ms ease;
+  }
+  body.theme-quiet .card:hover { background: #141414; }
+  body.theme-quiet.light .card:hover { background: #f4f4f5; }
+  body.theme-quiet .card:active { border-color: var(--border); background: var(--quiet-hover); }
+  body.theme-quiet .card-menu, body.theme-quiet .chip-picker, body.theme-quiet .edit-box,
+  body.theme-quiet .tts-dialog, body.theme-quiet .branch-popover {
+    border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.32);
+  }
+  body.theme-quiet.light .card-menu, body.theme-quiet.light .chip-picker,
+  body.theme-quiet.light .edit-box, body.theme-quiet.light .tts-dialog, body.theme-quiet.light .branch-popover {
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.08);
+  }
+  body.theme-quiet .chip {
+    background: var(--card); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; font-weight: 500;
+    transition: background-color 120ms ease, border-color 120ms ease;
+  }
+  body.theme-quiet .chip:hover { background: var(--quiet-hover); border-color: #2e2e30; }
+  body.theme-quiet.light .chip:hover { background: var(--quiet-hover); border-color: #d4d4d8; }
+  body.theme-quiet .chip:active { background: var(--border); }
+  body.theme-quiet .chip.danger { background: transparent; border-color: var(--border); color: var(--red); }
+  body.theme-quiet .chip.danger:hover { background: rgba(248,113,113,0.08); border-color: var(--red); }
+  body.theme-quiet .chip.chip-add { background: transparent; border-style: dashed; color: var(--dim); }
+  body.theme-quiet .chip.chip-add:hover { background: var(--quiet-hover); color: var(--text); border-style: solid; }
+  body.theme-quiet .chip.chip-edit-toggle:hover,
+  body.theme-quiet .chip.chip-edit-toggle.active { color: var(--accent); }
+  body.theme-quiet .tab { color: var(--dim); border-bottom-width: 2px; }
+  body.theme-quiet .tab:hover { color: var(--text); }
+  body.theme-quiet .tab.active { color: var(--text); border-color: var(--accent); }
+  body.theme-quiet .report-period-tab { background: transparent; border-color: var(--border); color: var(--dim); }
+  body.theme-quiet .report-period-tab:hover { background: var(--quiet-hover); color: var(--text); }
+  body.theme-quiet .report-period-tab.active { background: var(--accent); color: var(--quiet-accent-fg); border-color: var(--accent); }
+  body.theme-quiet .file-view-tab, body.theme-quiet .tile-btn {
+    border-color: var(--border); color: var(--dim); background: transparent;
+  }
+  body.theme-quiet .file-view-tab:hover, body.theme-quiet .tile-btn:hover {
+    background: var(--quiet-hover); color: var(--text); border-color: #2e2e30;
+  }
+  body.theme-quiet .file-view-tab.active, body.theme-quiet .tile-btn.active {
+    background: var(--accent); color: var(--quiet-accent-fg); border-color: var(--accent);
+  }
+  body.theme-quiet .send-input, body.theme-quiet .edit-box input, body.theme-quiet .edit-box select,
+  body.theme-quiet .edit-box textarea, body.theme-quiet .tts-body textarea, body.theme-quiet .tts-body select,
+  body.theme-quiet .csv-search, body.theme-quiet .chip-picker-header input {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+  body.theme-quiet .send-input::placeholder, body.theme-quiet .edit-box input::placeholder,
+  body.theme-quiet .edit-box textarea::placeholder { color: var(--dim); }
+  body.theme-quiet .send-input:focus, body.theme-quiet .edit-box input:focus,
+  body.theme-quiet .edit-box select:focus, body.theme-quiet .edit-box textarea:focus,
+  body.theme-quiet .tts-body textarea:focus, body.theme-quiet .tts-body select:focus,
+  body.theme-quiet .csv-search:focus, body.theme-quiet .chip-picker-header input:focus {
+    border-color: var(--accent); box-shadow: 0 0 0 3px var(--quiet-ring); outline: none;
+  }
+  body.theme-quiet ::selection { background: rgba(94,106,210,0.35); color: var(--text); }
+  body.theme-quiet.light ::selection { background: rgba(94,106,210,0.22); color: var(--text); }
+  body.theme-quiet ::-webkit-scrollbar { width: 10px; height: 10px; }
+  body.theme-quiet ::-webkit-scrollbar-track { background: transparent; }
+  body.theme-quiet ::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 6px; border: 2px solid var(--bg); }
+  body.theme-quiet ::-webkit-scrollbar-thumb:hover { background: #3a3a3a; }
+  body.theme-quiet.light ::-webkit-scrollbar-thumb { background: #d4d4d8; border-color: var(--bg); }
+  body.theme-quiet.light ::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }
+  body.theme-quiet.light .overlay-body { background: #0a0a0a !important; color: #fafafa !important; }
+  body.theme-quiet.light .peek-copy-btn { background: rgba(10,10,10,0.85); border-color: rgba(255,255,255,0.15); color: var(--dim); }
+  body.theme-quiet.light .card-preview-lines { background: #0a0a0a; color: #d4d4d8; }
+  body.theme-quiet.light #file-overlay .file-overlay-body { background: #0a0a0a; color: #fafafa; }
+  body.theme-quiet.light .conn-status.online { color: #16a34a; background: rgba(22,163,74,0.10); }
+  body.theme-quiet.light .conn-status.online::before { background: #16a34a; }
+  body.theme-quiet.light .conn-status.polling { color: #b45309; background: rgba(180,83,9,0.10); }
+  body.theme-quiet.light .conn-status.polling::before { background: #b45309; }
+  body.theme-quiet.light .conn-status.offline { color: #dc2626; background: rgba(220,38,38,0.10); }
+  body.theme-quiet.light .conn-status.offline::before { background: #dc2626; }
+
+  /* ── Theme: Liquid Glass (macOS Tahoe / iOS 26 vibrancy) ──────────── */
+  body.theme-glass {
+    --bg: #0e1117;
+    --card: rgba(28, 32, 48, 0.55);
+    --border: rgba(255, 255, 255, 0.10);
+    --text: rgba(255, 255, 255, 0.92);
+    --dim: rgba(255, 255, 255, 0.55);
+    --text2: rgba(255, 255, 255, 0.55);
+    --accent: #7dd3fc;
+    --green: #4ade80;
+    --red: #fb7185;
+    --yellow: #fcd34d;
+    --cyan: #5eead4;
+    --glass-border-strong: rgba(255,255,255,0.18);
+    --glass-accent-deep: #38bdf8;
+    --glass-accent-tint: rgba(125,211,252,0.18);
+    --glass-hover: rgba(255,255,255,0.06);
+    --glass-hi: rgba(255,255,255,0.08);
+    --glass-shadow: 0 8px 32px rgba(0,0,0,0.35), inset 0 0 0 1px rgba(255,255,255,0.06), inset 0 1px 0 rgba(255,255,255,0.08);
+    background:
+      radial-gradient(120vw 80vh at 8% 10%,  rgba(99,102,241,0.22), transparent 60%),
+      radial-gradient(100vw 70vh at 92% 90%, rgba(45,212,191,0.16), transparent 55%),
+      radial-gradient(60vw 60vh at 50% 50%,  rgba(244,114,182,0.08), transparent 65%),
+      linear-gradient(135deg, #1a1d2e 0%, #0e1117 45%, #1d1525 100%);
+    background-attachment: fixed;
+    color: var(--text);
+  }
+  body.theme-glass.light {
+    --bg: #f5f5f7;
+    --card: rgba(255,255,255,0.62);
+    --border: rgba(0,0,0,0.08);
+    --text: rgba(20,22,30,0.92);
+    --dim: rgba(20,22,30,0.55);
+    --text2: rgba(20,22,30,0.55);
+    --accent: #0284c7;
+    --green: #16a34a;
+    --red: #e11d48;
+    --yellow: #b45309;
+    --cyan: #0891b2;
+    --glass-border-strong: rgba(0,0,0,0.14);
+    --glass-accent-deep: #0369a1;
+    --glass-accent-tint: rgba(2,132,199,0.14);
+    --glass-hover: rgba(0,0,0,0.04);
+    --glass-hi: rgba(255,255,255,0.55);
+    --glass-shadow: 0 8px 28px rgba(15,23,42,0.10), inset 0 0 0 1px rgba(255,255,255,0.65), inset 0 1px 0 rgba(255,255,255,0.85);
+    background:
+      radial-gradient(110vw 70vh at 12% 8%,  rgba(125,211,252,0.30), transparent 60%),
+      radial-gradient(90vw  60vh at 88% 92%, rgba(251,191,36,0.18),  transparent 55%),
+      linear-gradient(135deg, #fafafa 0%, #f5f5f7 50%, #ece9f0 100%);
+    background-attachment: fixed;
+    color-scheme: light;
+  }
+  body.theme-glass .card, body.theme-glass .edit-box, body.theme-glass .chip-picker,
+  body.theme-glass .tts-dialog, body.theme-glass .card-menu, body.theme-glass .report-card,
+  body.theme-glass .branch-popover, body.theme-glass .archived-card, body.theme-glass .archived-footer {
+    background: var(--card);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border: 1px solid var(--border);
+    box-shadow: var(--glass-shadow);
+  }
+  body.theme-glass .card:active, body.theme-glass .card:hover { border-color: var(--glass-border-strong); }
+  body.theme-glass .card-preview-lines { background: rgba(1,4,9,0.72); color: rgba(205,217,229,0.95); }
+  body.theme-glass .btn {
+    background: rgba(255,255,255,0.06);
+    backdrop-filter: blur(16px) saturate(160%);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
+    border: 1px solid var(--glass-border-strong); color: var(--text);
+    border-radius: 10px;
+    box-shadow: inset 0 1px 0 var(--glass-hi), 0 1px 2px rgba(0,0,0,0.25);
+    transition: background 0.15s, border-color 0.15s, transform 0.05s;
+  }
+  body.theme-glass .btn:hover { background: rgba(255,255,255,0.12); }
+  body.theme-glass .btn:active { background: rgba(255,255,255,0.18); transform: scale(0.98); }
+  body.theme-glass .btn:focus-visible {
+    outline: none;
+    box-shadow: inset 0 1px 0 var(--glass-hi), 0 0 0 3px var(--glass-accent-tint), 0 0 0 1px var(--accent);
+  }
+  body.theme-glass .btn.primary {
+    background: linear-gradient(180deg, var(--accent) 0%, var(--glass-accent-deep) 100%);
+    border-color: rgba(255,255,255,0.25); color: #0a1426; font-weight: 600;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.45), 0 4px 14px rgba(125,211,252,0.35), 0 1px 2px rgba(0,0,0,0.20);
+  }
+  body.theme-glass .btn.primary:hover { filter: brightness(1.08); }
+  body.theme-glass .btn.primary:active { filter: brightness(0.95); transform: scale(0.98); }
+  body.theme-glass .btn.danger {
+    background: rgba(251,113,133,0.14); border-color: rgba(251,113,133,0.40);
+    color: #fecdd3; box-shadow: inset 0 1px 0 rgba(255,255,255,0.10);
+  }
+  body.theme-glass .btn.danger:hover { background: rgba(251,113,133,0.22); }
+  body.theme-glass.light .btn.danger { color: #be123c; }
+  body.theme-glass .chip {
+    background: rgba(125,211,252,0.10); border-color: rgba(125,211,252,0.28); color: var(--accent);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  }
+  body.theme-glass .chip:active { background: rgba(125,211,252,0.22); }
+  body.theme-glass .chip.danger { background: rgba(251,113,133,0.12); border-color: rgba(251,113,133,0.30); color: var(--red); }
+  body.theme-glass .file-view-tab.active, body.theme-glass .report-period-tab.active, body.theme-glass .tile-btn.active {
+    background: var(--accent); color: #0a1426; border-color: var(--accent);
+  }
+  body.theme-glass .send-input, body.theme-glass .edit-box input, body.theme-glass .edit-box select,
+  body.theme-glass .edit-box textarea, body.theme-glass .tts-body textarea, body.theme-glass .tts-body select,
+  body.theme-glass .chip-picker-header input, body.theme-glass .csv-search {
+    background: rgba(255,255,255,0.04);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border-color: var(--glass-border-strong); color: var(--text);
+  }
+  body.theme-glass.light .send-input, body.theme-glass.light .edit-box input,
+  body.theme-glass.light .edit-box select, body.theme-glass.light .edit-box textarea { background: rgba(255,255,255,0.70); }
+  body.theme-glass .send-input:focus, body.theme-glass .edit-box input:focus,
+  body.theme-glass .edit-box select:focus, body.theme-glass .edit-box textarea:focus {
+    border-color: var(--accent); box-shadow: 0 0 0 3px var(--glass-accent-tint);
+  }
+  body.theme-glass .gp-header, body.theme-glass .gp-send,
+  body.theme-glass #gridstack-container .grid-stack-item-content {
+    background: var(--card);
+    backdrop-filter: blur(20px) saturate(170%); -webkit-backdrop-filter: blur(20px) saturate(170%);
+    border-color: var(--border);
+  }
+  body.theme-glass .amux-audio-bar {
+    background: rgba(28,32,48,0.55);
+    backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border-top: 1px solid var(--glass-border-strong);
+  }
+  body.theme-glass .badge.yolo          { background: rgba(252,211,77,0.18);  color: var(--yellow); }
+  body.theme-glass .badge.auto-continue { background: rgba(125,211,252,0.20); color: var(--accent); }
+  body.theme-glass .badge.model         { background: rgba(94,234,212,0.18);  color: var(--cyan); }
+  body.theme-glass .badge.codex         { background: rgba(74,222,128,0.18);  color: var(--green); }
+  body.theme-glass .dot.running { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  body.theme-glass .conn-status.online  { color: var(--green);  background: rgba(74,222,128,0.14); }
+  body.theme-glass .conn-status.online::before  { background: var(--green); }
+  body.theme-glass .conn-status.polling { color: var(--yellow); background: rgba(252,211,77,0.14); }
+  body.theme-glass .conn-status.polling::before { background: var(--yellow); }
+  body.theme-glass .conn-status.offline { color: var(--red);    background: rgba(251,113,133,0.14); }
+  body.theme-glass .conn-status.offline::before { background: var(--red); }
+  body.theme-glass .overlay-body { background: rgba(1,4,9,0.92); color: #cdd9e5; }
+  @media (prefers-reduced-transparency: reduce) {
+    body.theme-glass .card, body.theme-glass .btn, body.theme-glass .gp-header,
+    body.theme-glass .gp-send, body.theme-glass .amux-audio-bar, body.theme-glass .send-input,
+    body.theme-glass .edit-box input, body.theme-glass .edit-box textarea {
+      backdrop-filter: none; -webkit-backdrop-filter: none;
+    }
+    body.theme-glass { --card: #1c2030; }
+    body.theme-glass.light { --card: #ffffff; }
+  }
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    body.theme-glass { --card: #1c2030; --border: rgba(255,255,255,0.14); background: linear-gradient(135deg,#1a1d2e 0%,#0e1117 50%,#1d1525 100%); }
+    body.theme-glass.light { --card: #ffffff; --border: rgba(0,0,0,0.10); background: linear-gradient(135deg,#fafafa 0%,#f5f5f7 50%,#ece9f0 100%); }
+    body.theme-glass .card, body.theme-glass .btn, body.theme-glass .gp-header,
+    body.theme-glass .gp-send, body.theme-glass .amux-audio-bar, body.theme-glass .send-input,
+    body.theme-glass .chip, body.theme-glass .chip-picker, body.theme-glass .tts-dialog,
+    body.theme-glass .edit-box {
+      background: var(--card); box-shadow: 0 4px 16px rgba(0,0,0,0.30);
+    }
+  }
+
+  /* ── Theme: Phosphor Terminal (retro CRT) ─────────────────────────── */
+  body.theme-phosphor {
+    --bg:#050a05; --card:#0a140a; --border:#1f4d2a;
+    --text:#33ff66; --dim:#2faa55; --text2:#2faa55;
+    --accent:#7fffaa; --green:#33ff66; --red:#ff5577;
+    --yellow:#c8ff33; --cyan:#66ffcc;
+    --phosphor-rgb: 51,255,102;
+    color-scheme: dark;
+  }
+  body.theme-phosphor-amber {
+    --bg:#0a0703; --card:#140d05; --border:#5a3a10;
+    --text:#ffb000; --dim:#b87a00; --text2:#b87a00;
+    --accent:#ffd166; --green:#ffb000; --red:#ff5544;
+    --yellow:#ffd166; --cyan:#ffd9a0;
+    --phosphor-rgb: 255,176,0;
+    color-scheme: dark;
+  }
+  body.theme-phosphor, body.theme-phosphor-amber {
+    font-family: 'JetBrains Mono','IBM Plex Mono','Berkeley Mono','SF Mono','Fira Code','Cascadia Code',Menlo,Consolas,monospace !important;
+    letter-spacing: 0.01em;
+    text-shadow: 0 0 1px rgba(var(--phosphor-rgb), 0.45);
+    -webkit-font-smoothing: antialiased;
+  }
+  body.theme-phosphor h1, body.theme-phosphor-amber h1,
+  body.theme-phosphor h2, body.theme-phosphor-amber h2,
+  body.theme-phosphor h3, body.theme-phosphor-amber h3 {
+    text-transform: uppercase; letter-spacing: 0.08em;
+    text-shadow: 0 0 6px rgba(var(--phosphor-rgb), 0.55);
+  }
+  body.theme-phosphor *, body.theme-phosphor-amber * { border-radius: 0 !important; }
+  body.theme-phosphor .chip, body.theme-phosphor-amber .chip,
+  body.theme-phosphor .amux-audio-bar input[type=range]::-webkit-slider-thumb,
+  body.theme-phosphor-amber .amux-audio-bar input[type=range]::-webkit-slider-thumb { border-radius: 2px !important; }
+  body.theme-phosphor .dot, body.theme-phosphor-amber .dot { border-radius: 50% !important; }
+  body.theme-phosphor .card, body.theme-phosphor-amber .card,
+  body.theme-phosphor .report-card, body.theme-phosphor-amber .report-card,
+  body.theme-phosphor .edit-box, body.theme-phosphor-amber .edit-box,
+  body.theme-phosphor .card-menu, body.theme-phosphor-amber .card-menu {
+    background: var(--card); border: 1px solid var(--border);
+    box-shadow: inset 0 0 0 1px rgba(var(--phosphor-rgb), 0.06), 0 0 12px rgba(var(--phosphor-rgb), 0.08);
+  }
+  body.theme-phosphor .card:active, body.theme-phosphor-amber .card:active,
+  body.theme-phosphor .card:hover,  body.theme-phosphor-amber .card:hover {
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px rgba(var(--phosphor-rgb), 0.12), 0 0 18px rgba(var(--phosphor-rgb), 0.18);
+  }
+  body.theme-phosphor .btn, body.theme-phosphor-amber .btn {
+    background: transparent; border: 1px solid var(--border); color: var(--text);
+    font-family: inherit; text-transform: uppercase; letter-spacing: 0.05em;
+    padding: 8px 10px; min-height: 44px; position: relative;
+    display: inline-flex; align-items: center; gap: 4px;
+    text-shadow: 0 0 2px rgba(var(--phosphor-rgb), 0.5);
+  }
+  body.theme-phosphor .btn::before, body.theme-phosphor-amber .btn::before { content: '[ '; opacity: 0.6; }
+  body.theme-phosphor .btn::after,  body.theme-phosphor-amber .btn::after  { content: ' ]'; opacity: 0.6; }
+  body.theme-phosphor .btn:hover, body.theme-phosphor-amber .btn:hover {
+    border-color: var(--accent); color: var(--accent);
+    box-shadow: 0 0 12px rgba(var(--phosphor-rgb), 0.25);
+  }
+  body.theme-phosphor .btn:active, body.theme-phosphor-amber .btn:active {
+    background: rgba(var(--phosphor-rgb), 0.10); color: var(--accent);
+  }
+  body.theme-phosphor .btn.primary, body.theme-phosphor-amber .btn.primary {
+    background: rgba(var(--phosphor-rgb), 0.12); border-color: var(--accent);
+    color: var(--accent); font-weight: 700;
+    box-shadow: 0 0 10px rgba(var(--phosphor-rgb), 0.30);
+  }
+  body.theme-phosphor .btn.primary::before, body.theme-phosphor-amber .btn.primary::before { content: '>> '; opacity: 0.85; }
+  body.theme-phosphor .btn.primary::after,  body.theme-phosphor-amber .btn.primary::after  { content: ''; }
+  body.theme-phosphor .btn.danger, body.theme-phosphor-amber .btn.danger {
+    border-color: var(--red); color: var(--red);
+    text-shadow: 0 0 2px rgba(255,85,119,0.6);
+  }
+  body.theme-phosphor .btn.danger:hover, body.theme-phosphor-amber .btn.danger:hover {
+    background: rgba(255,85,119,0.10); box-shadow: 0 0 12px rgba(255,85,119,0.30);
+  }
+  body.theme-phosphor .btn.danger::before, body.theme-phosphor-amber .btn.danger::before { content: '! '; }
+  body.theme-phosphor .btn.danger::after,  body.theme-phosphor-amber .btn.danger::after  { content: ' !'; }
+  body.theme-phosphor .chip, body.theme-phosphor-amber .chip {
+    background: transparent; color: var(--text); border: 1px solid var(--border);
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  body.theme-phosphor .chip:active, body.theme-phosphor-amber .chip:active,
+  body.theme-phosphor .chip:hover,  body.theme-phosphor-amber .chip:hover {
+    background: rgba(var(--phosphor-rgb), 0.10); border-color: var(--accent); color: var(--accent);
+  }
+  body.theme-phosphor .chip.danger, body.theme-phosphor-amber .chip.danger { border-color: var(--red); color: var(--red); background: transparent; }
+  body.theme-phosphor .send-input, body.theme-phosphor-amber .send-input,
+  body.theme-phosphor .edit-box input, body.theme-phosphor-amber .edit-box input,
+  body.theme-phosphor .edit-box textarea, body.theme-phosphor-amber .edit-box textarea,
+  body.theme-phosphor .edit-box select, body.theme-phosphor-amber .edit-box select {
+    background: #000; color: var(--text); border: 1px solid var(--border);
+    font-family: inherit; caret-color: var(--accent);
+    text-shadow: 0 0 2px rgba(var(--phosphor-rgb), 0.4);
+  }
+  body.theme-phosphor .send-input:focus, body.theme-phosphor-amber .send-input:focus,
+  body.theme-phosphor .edit-box input:focus, body.theme-phosphor-amber .edit-box input:focus,
+  body.theme-phosphor .edit-box textarea:focus, body.theme-phosphor-amber .edit-box textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent), 0 0 10px rgba(var(--phosphor-rgb), 0.35);
+  }
+  body.theme-phosphor .tile-btn, body.theme-phosphor-amber .tile-btn,
+  body.theme-phosphor .file-view-tab, body.theme-phosphor-amber .file-view-tab,
+  body.theme-phosphor .report-period-tab, body.theme-phosphor-amber .report-period-tab {
+    background: transparent; color: var(--dim); border: 1px solid var(--border);
+  }
+  body.theme-phosphor .tile-btn.active, body.theme-phosphor-amber .tile-btn.active,
+  body.theme-phosphor .file-view-tab.active, body.theme-phosphor-amber .file-view-tab.active,
+  body.theme-phosphor .report-period-tab.active, body.theme-phosphor-amber .report-period-tab.active {
+    background: rgba(var(--phosphor-rgb), 0.15); color: var(--accent); border-color: var(--accent);
+  }
+  body.theme-phosphor .peek-copy-btn, body.theme-phosphor-amber .peek-copy-btn {
+    background: rgba(0,0,0,0.85); border: 1px solid var(--border); color: var(--text);
+  }
+  body.theme-phosphor .peek-copy-btn:active, body.theme-phosphor-amber .peek-copy-btn:active {
+    background: rgba(var(--phosphor-rgb), 0.20); color: var(--accent);
+  }
+  body.theme-phosphor .dot.running, body.theme-phosphor-amber .dot.running {
+    background: var(--accent); box-shadow: 0 0 6px var(--accent), 0 0 12px rgba(var(--phosphor-rgb), 0.6);
+  }
+  body.theme-phosphor.scanlines::after, body.theme-phosphor-amber.scanlines::after {
+    content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 9999;
+    background: repeating-linear-gradient(to bottom,
+      rgba(0,0,0,0.00) 0px, rgba(0,0,0,0.00) 2px,
+      rgba(0,0,0,0.22) 3px, rgba(0,0,0,0.00) 4px);
+    mix-blend-mode: multiply;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    body.theme-phosphor.scanlines::after, body.theme-phosphor-amber.scanlines::after { background: none; }
+  }
+  body.theme-phosphor .overlay-body, body.theme-phosphor-amber .overlay-body,
+  body.theme-phosphor #file-overlay .file-overlay-body,
+  body.theme-phosphor-amber #file-overlay .file-overlay-body {
+    background: #000 !important; color: var(--text);
+  }
+  body.theme-phosphor .csv-wrap, body.theme-phosphor-amber .csv-wrap,
+  body.theme-phosphor .csv-table, body.theme-phosphor-amber .csv-table,
+  body.theme-phosphor .csv-table th, body.theme-phosphor-amber .csv-table th,
+  body.theme-phosphor .csv-table td, body.theme-phosphor-amber .csv-table td {
+    font-family: 'Calibri','Segoe UI','Helvetica Neue',Arial,sans-serif !important;
+    text-shadow: none !important; border-radius: 0 !important; color: #000 !important;
+  }
+  body.theme-phosphor .peek-highlight, body.theme-phosphor-amber .peek-highlight {
+    background: rgba(var(--phosphor-rgb), 0.35) !important; color: #000 !important;
+  }
+
+  /* ── Theme: Trading Terminal (Bloomberg brutalist density) ────────── */
+  body.theme-trade {
+    --bg:#000000; --card:#0d0d0d; --border:#232323;
+    --text:#e6e6e6; --dim:#8a8a8a; --text2:#8a8a8a;
+    --accent:#ff8800; --green:#00d957; --red:#ff2e4d;
+    --yellow:#f5c518; --cyan:#29d3c7;
+    --trade-row-alt:#080808; --trade-hover:#161616;
+    font-family: 'IBM Plex Mono','JetBrains Mono','SF Mono','Cascadia Code',ui-monospace,Consolas,monospace;
+    font-feature-settings: "tnum" 1, "zero" 1, "calt" 0;
+    font-variant-numeric: tabular-nums;
+    font-size: 12.5px; line-height: 1.3; letter-spacing: 0.005em;
+    color-scheme: dark;
+  }
+  body.theme-trade h1 { font-size: 1.05rem; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; }
+  body.theme-trade h1 .dim { font-size: 0.72rem; }
+  body.theme-trade .card, body.theme-trade .btn, body.theme-trade .chip,
+  body.theme-trade .tile-btn, body.theme-trade .card-menu, body.theme-trade .card-menu-btn,
+  body.theme-trade .edit-box, body.theme-trade .archived-footer, body.theme-trade .archived-card,
+  body.theme-trade .archived-wake-btn, body.theme-trade .archived-del-btn,
+  body.theme-trade .report-card, body.theme-trade .report-period-tab,
+  body.theme-trade .branch-badge, body.theme-trade .send-input,
+  body.theme-trade .file-view-tab, body.theme-trade .overlay-body,
+  body.theme-trade .card-preview-lines, body.theme-trade .badge,
+  body.theme-trade .tmpl-accordion, body.theme-trade .csv-search,
+  body.theme-trade .conn-status { border-radius: 2px; }
+  body.theme-trade .cards { gap: 4px; }
+  body.theme-trade .card {
+    background: var(--card); border: 1px solid var(--border); padding: 8px 10px;
+    box-shadow: none; transition: border-color 0.08s, background 0.08s;
+  }
+  body.theme-trade .card:hover     { border-color: var(--accent); background: var(--trade-hover); }
+  body.theme-trade .card:active    { border-color: var(--accent); }
+  body.theme-trade .card.expanded  { border-color: var(--accent); }
+  body.theme-trade .card-name      { font-size: 0.9rem; font-weight: 700; letter-spacing: 0.01em; }
+  body.theme-trade .card-dir       { font-size: 0.72rem; }
+  body.theme-trade .card-preview-lines {
+    background: #000; border: 1px solid var(--border); color: var(--dim);
+    font-size: 0.7rem; line-height: 1.25; padding: 4px 6px; max-height: 64px; margin-bottom: 4px;
+  }
+  body.theme-trade .badges  { gap: 3px; margin-top: 3px; }
+  body.theme-trade .badge {
+    background: transparent !important; border: 1px solid currentColor;
+    padding: 0 5px; font-size: 0.62rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em; line-height: 1.5;
+  }
+  body.theme-trade .btn, body.theme-trade .tile-btn, body.theme-trade .archived-wake-btn,
+  body.theme-trade .archived-del-btn, body.theme-trade .file-view-tab, body.theme-trade .report-period-tab {
+    font-family: inherit; font-size: 0.74rem;
+    text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;
+    padding: 6px 12px; min-height: 28px;
+    background: transparent; color: var(--text); border: 1px solid var(--border);
+    box-shadow: none; transition: background 0.06s, color 0.06s, border-color 0.06s;
+  }
+  body.theme-trade .btn:hover, body.theme-trade .tile-btn:hover,
+  body.theme-trade .archived-wake-btn:hover, body.theme-trade .file-view-tab:hover,
+  body.theme-trade .report-period-tab:hover {
+    background: var(--accent); color: #000; border-color: var(--accent);
+  }
+  body.theme-trade .btn:active { background: #cc6d00; color: #000; border-color: #cc6d00; }
+  body.theme-trade .btn.primary { background: var(--accent); color: #000; border-color: var(--accent); }
+  body.theme-trade .btn.primary:hover { background: #ffae3d; border-color: #ffae3d; }
+  body.theme-trade .btn.danger { color: var(--red); border-color: var(--red); background: transparent; }
+  body.theme-trade .btn.danger:hover { background: var(--red); color: #000; }
+  body.theme-trade .btn:focus-visible, body.theme-trade .tile-btn:focus-visible,
+  body.theme-trade .file-view-tab:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  body.theme-trade .tile-btn { width: 24px; height: 24px; padding: 0; }
+  body.theme-trade .tile-btn.active, body.theme-trade .file-view-tab.active,
+  body.theme-trade .report-period-tab.active {
+    background: var(--accent); color: #000; border-color: var(--accent);
+  }
+  body.theme-trade .conn-status {
+    background: transparent !important; padding: 2px 4px; font-family: inherit;
+    font-size: 0.7rem; letter-spacing: 0.05em; text-transform: uppercase;
+  }
+  body.theme-trade .conn-status::before { width: 6px; height: 6px; border-radius: 0; }
+  body.theme-trade .conn-status.online  { color: var(--green); }
+  body.theme-trade .conn-status.online::before  { background: var(--green); box-shadow: 0 0 4px var(--green); }
+  body.theme-trade .conn-status.polling { color: var(--yellow); }
+  body.theme-trade .conn-status.polling::before { background: var(--yellow); }
+  body.theme-trade .conn-status.offline { color: var(--red); }
+  body.theme-trade .conn-status.offline::before { background: var(--red); }
+  body.theme-trade .chip {
+    background: transparent; border: 1px solid var(--border); color: var(--text);
+    padding: 3px 8px; min-height: 24px; font-size: 0.72rem; letter-spacing: 0.03em;
+  }
+  body.theme-trade .chip:hover   { border-color: var(--accent); color: var(--accent); }
+  body.theme-trade .chip.danger  { color: var(--red); border-color: var(--red); background: transparent; }
+  body.theme-trade .chip.chip-add { color: var(--dim); }
+  body.theme-trade .badge.yolo          { color: var(--yellow); }
+  body.theme-trade .badge.auto-continue { color: var(--cyan); }
+  body.theme-trade .badge.model         { color: var(--cyan); }
+  body.theme-trade .badge.codex         { color: var(--green); }
+  body.theme-trade .gp-header { background: #000; border-bottom: 1px solid var(--border); }
+  body.theme-trade .dot { border-radius: 0; width: 8px; height: 8px; }
+  body.theme-trade .dot.running { box-shadow: 0 0 4px var(--green); }
+  body.theme-trade .archived-footer { background: var(--card); font-weight: 600; text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.05em; padding: 6px 10px; }
+  body.theme-trade .archived-body   { gap: 0; }
+  body.theme-trade .archived-card   { background: var(--card); padding: 4px 8px; font-size: 0.72rem; border-radius: 0; border-top: none; }
+  body.theme-trade .archived-card:nth-child(even) { background: var(--trade-row-alt); }
+  body.theme-trade .archived-card:hover { background: var(--trade-hover); border-color: var(--accent); }
+  body.theme-trade .send-input, body.theme-trade .edit-box input,
+  body.theme-trade .edit-box select, body.theme-trade .edit-box textarea, body.theme-trade .csv-search {
+    background: #000; color: var(--text); border-color: var(--border);
+    font-family: inherit; font-size: 0.8rem;
+  }
+  body.theme-trade .send-input:focus, body.theme-trade .edit-box input:focus,
+  body.theme-trade .edit-box textarea:focus, body.theme-trade .edit-box select:focus {
+    border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent);
+  }
+  body.theme-trade .overlay-body, body.theme-trade .file-overlay-body {
+    background: #000; font-size: 0.74rem; line-height: 1.32;
+  }
+  body.theme-trade .sortable-ghost {
+    background: rgba(255,136,0,0.06) !important;
+    border: 1px dashed var(--accent) !important; border-radius: 0;
+  }
+  body.theme-trade .sortable-drag { box-shadow: none; transform: none; border-radius: 0; }
+  body.theme-trade ::selection { background: var(--accent); color: #000; }
+  body.theme-trade * { scrollbar-width: thin; scrollbar-color: #2a2a2a #000; }
+  body.theme-trade *::-webkit-scrollbar { width: 8px; height: 8px; }
+  body.theme-trade *::-webkit-scrollbar-thumb { background: #2a2a2a; }
+  body.theme-trade *::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+  body.theme-trade.dense { font-size: 11.5px; }
+  body.theme-trade.dense .card             { padding: 5px 8px; }
+  body.theme-trade.dense .cards            { gap: 2px; }
+  body.theme-trade.dense .btn              { padding: 4px 9px; min-height: 24px; font-size: 0.7rem; }
+  body.theme-trade.dense .card-preview-lines { max-height: 44px; padding: 3px 5px; font-size: 0.66rem; }
+  body.theme-trade.dense .chip             { padding: 2px 6px; min-height: 20px; font-size: 0.68rem; }
+  body.theme-trade.dense .badges           { margin-top: 2px; }
+  body.theme-trade.dense .badge            { font-size: 0.58rem; padding: 0 4px; }
+  body.theme-trade.dense .card-header-meta { gap: 4px; }
+  body.theme-trade.dense h1                { font-size: 0.9rem; margin-bottom: 8px; }
+  @media (max-width: 600px) {
+    body.theme-trade { font-size: 13px; }
+    body.theme-trade .btn, body.theme-trade .archived-wake-btn, body.theme-trade .file-view-tab {
+      min-height: 40px; padding: 9px 14px; font-size: 0.78rem;
+    }
+    body.theme-trade .tile-btn      { width: 36px; height: 36px; }
+    body.theme-trade .chip          { min-height: 32px; padding: 6px 10px; }
+    body.theme-trade .card          { padding: 10px 12px; }
+    body.theme-trade.dense .btn     { min-height: 40px; padding: 9px 14px; font-size: 0.78rem; }
+    body.theme-trade.dense .chip    { min-height: 32px; padding: 6px 10px; }
+  }
+
   /* ── Reports ── */
   .report-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   .report-card-header { display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--border); background:var(--bg); }
@@ -10773,6 +11402,29 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     .jrnl-gallery { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
   }
 
+  /* ─── Tweaks (Accent / Density / Animations) ─── */
+  /* Accent override — beats theme defaults via source order + higher spec */
+  body[data-accent="indigo"]  { --accent: #7c9eff; }
+  body[data-accent="emerald"] { --accent: #3fb950; }
+  body[data-accent="amber"]   { --accent: #ffb84d; }
+  body[data-accent="rose"]    { --accent: #ff6f8d; }
+  /* Density — global scale of paddings/gaps via custom props */
+  :root { --density-scale: 1; }
+  body[data-density="spacious"] { --density-scale: 1.15; }
+  body[data-density="dense"]    { --density-scale: 0.82; }
+  body[data-density="spacious"] .card { padding: 14px; }
+  body[data-density="dense"] .card    { padding: 7px 9px; }
+  body[data-density="spacious"] .tab-bar button { padding: 9px 14px; }
+  body[data-density="dense"] .tab-bar button    { padding: 4px 8px; font-size: 0.78rem; }
+  body[data-density="spacious"] .settings-row { padding: 8px 0; }
+  body[data-density="dense"] .settings-row    { padding: 3px 0; }
+  /* Animations off — kill all transitions/animations globally */
+  body[data-anim="off"], body[data-anim="off"] * {
+    transition: none !important;
+    animation-duration: 0s !important;
+    animation-iteration-count: 1 !important;
+  }
+
 </style>
 </head>
 <body>
@@ -10918,9 +11570,62 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <div class="settings-section">
           <div class="settings-section-label">Appearance</div>
           <div class="settings-row" style="justify-content:space-between;align-items:center;">
+            <span style="font-size:0.85rem;">Theme</span>
+            <select id="theme-select" onchange="setThemeName(this.value)"
+              style="background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;font-size:0.8rem;min-width:152px;cursor:pointer;">
+              <option value="github">GitHub (default)</option>
+              <option value="quiet">Quiet Modern</option>
+              <option value="glass">Liquid Glass</option>
+              <option value="phosphor">Phosphor Terminal</option>
+              <option value="phosphor-amber">Phosphor Amber</option>
+              <option value="trade">Trading Terminal</option>
+            </select>
+          </div>
+          <div class="settings-row" id="theme-light-row" style="justify-content:space-between;align-items:center;margin-top:8px;">
             <span style="font-size:0.85rem;" id="theme-label">Dark mode</span>
             <label class="theme-toggle">
               <input type="checkbox" id="theme-checkbox" onchange="toggleTheme(this.checked)">
+              <span class="theme-track"><span class="theme-thumb"></span></span>
+            </label>
+          </div>
+          <div class="settings-row" id="theme-scanlines-row" style="justify-content:space-between;align-items:center;margin-top:8px;display:none;">
+            <span style="font-size:0.85rem;">Scanlines</span>
+            <label class="theme-toggle">
+              <input type="checkbox" id="theme-scanlines-checkbox" onchange="toggleScanlines(this.checked)">
+              <span class="theme-track"><span class="theme-thumb"></span></span>
+            </label>
+          </div>
+          <div class="settings-row" id="theme-dense-row" style="justify-content:space-between;align-items:center;margin-top:8px;display:none;">
+            <span style="font-size:0.85rem;">Dense mode</span>
+            <label class="theme-toggle">
+              <input type="checkbox" id="theme-dense-checkbox" onchange="toggleDense(this.checked)">
+              <span class="theme-track"><span class="theme-thumb"></span></span>
+            </label>
+          </div>
+          <div class="settings-row" style="justify-content:space-between;align-items:center;margin-top:8px;">
+            <span style="font-size:0.85rem;">Accent</span>
+            <select id="theme-accent-select" onchange="setAccent(this.value)"
+              style="background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;font-size:0.8rem;min-width:152px;cursor:pointer;">
+              <option value="default">Theme default</option>
+              <option value="indigo">Indigo</option>
+              <option value="emerald">Emerald</option>
+              <option value="amber">Amber</option>
+              <option value="rose">Rose</option>
+            </select>
+          </div>
+          <div class="settings-row" style="justify-content:space-between;align-items:center;margin-top:8px;">
+            <span style="font-size:0.85rem;">Density</span>
+            <select id="theme-density-select" onchange="setDensity(this.value)"
+              style="background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 8px;font-size:0.8rem;min-width:152px;cursor:pointer;">
+              <option value="spacious">Spacious</option>
+              <option value="comfortable">Cozy</option>
+              <option value="dense">Dense</option>
+            </select>
+          </div>
+          <div class="settings-row" style="justify-content:space-between;align-items:center;margin-top:8px;">
+            <span style="font-size:0.85rem;">Animations</span>
+            <label class="theme-toggle">
+              <input type="checkbox" id="theme-animations-checkbox" onchange="toggleAnimations(this.checked)" checked>
               <span class="theme-track"><span class="theme-thumb"></span></span>
             </label>
           </div>
@@ -10947,6 +11652,30 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
               onclick="saveApiKey()">Save</button>
           </div>
           <div id="settings-apikey-status" style="font-size:0.7rem;color:var(--dim);margin-top:4px;"></div>
+        </div>
+        <div class="settings-sep"></div>
+        <div class="settings-section" id="settings-pushover-section">
+          <div class="settings-section-label">Pushover Notifications</div>
+          <div style="font-size:0.72rem;color:var(--dim);margin-bottom:6px;">Receive push notifications on iOS/Android when sessions need attention.</div>
+          <div style="font-size:0.72rem;color:var(--dim);margin-bottom:4px;">App Token</div>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
+            <input id="settings-pushover-token" type="password" autocomplete="off"
+              class="search-input" placeholder="a…"
+              style="flex:1;font-size:0.78rem;padding:5px 8px;box-sizing:border-box;min-width:0;">
+          </div>
+          <div style="font-size:0.72rem;color:var(--dim);margin-bottom:4px;">User Key</div>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
+            <input id="settings-pushover-user" type="password" autocomplete="off"
+              class="search-input" placeholder="u…"
+              style="flex:1;font-size:0.78rem;padding:5px 8px;box-sizing:border-box;min-width:0;">
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button class="btn" style="font-size:0.7rem;padding:3px 10px;white-space:nowrap;"
+              onclick="savePushoverKeys()">Save</button>
+            <button class="btn" style="font-size:0.7rem;padding:3px 10px;white-space:nowrap;"
+              onclick="sendPushoverTest()">Send test</button>
+          </div>
+          <div id="settings-pushover-status" style="font-size:0.7rem;color:var(--dim);margin-top:4px;"></div>
         </div>
         <div class="settings-sep"></div>
         <div class="settings-section" id="settings-billing-section" style="display:none;">
@@ -11751,22 +12480,25 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     </div>
     <div id="sched-rec-fields" style="display:none;">
       <div class="field-group">
-        <label class="field-label">Schedule expression <span class="field-optional">(optional — overrides dropdowns below)</span></label>
-        <input id="sched-expr" type="text" placeholder='e.g. "every 30m", "daily at 09:00", "0 9 * * 1-5"' autocomplete="off">
+        <label class="field-label">Cron / schedule expression <span class="field-optional">(paste from crontab.guru, or use builder below)</span></label>
+        <input id="sched-expr" type="text" placeholder='e.g. "0 9 * * 1-5", "every 30m", "daily at 09:00"' autocomplete="off" oninput="updateSchedExprUI()">
+        <div id="sched-expr-preview" style="font-size:0.72rem;margin-top:4px;min-height:1em;font-family:monospace;color:var(--dim);"></div>
         <div style="font-size:0.65rem;color:var(--dim);margin-top:3px;display:flex;gap:6px;flex-wrap:wrap;">
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every 30m'" style="color:var(--accent);">every 30m</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every 1h'" style="color:var(--accent);">every 1h</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every morning'" style="color:var(--accent);">every morning</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every evening'" style="color:var(--accent);">every evening</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='daily at 6pm'" style="color:var(--accent);">daily at 6pm</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every weekday at 9am'" style="color:var(--accent);">every weekday at 9am</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='weekly on monday at 08:00'" style="color:var(--accent);">weekly on monday</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='monthly on 1 at 9am'" style="color:var(--accent);">monthly on 1st</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='0 9 * * 1-5'" style="color:var(--accent);">cron: weekdays 9am</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every 30m';updateSchedExprUI()" style="color:var(--accent);">every 30m</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every 1h';updateSchedExprUI()" style="color:var(--accent);">every 1h</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every morning';updateSchedExprUI()" style="color:var(--accent);">every morning</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every evening';updateSchedExprUI()" style="color:var(--accent);">every evening</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='daily at 6pm';updateSchedExprUI()" style="color:var(--accent);">daily at 6pm</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every weekday at 9am';updateSchedExprUI()" style="color:var(--accent);">every weekday at 9am</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='weekly on monday at 08:00';updateSchedExprUI()" style="color:var(--accent);">weekly on monday</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='monthly on 1 at 9am';updateSchedExprUI()" style="color:var(--accent);">monthly on 1st</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='0 9 * * 1-5';updateSchedExprUI()" style="color:var(--accent);">cron: weekdays 9am</a>
+          <a href="https://crontab.guru/" target="_blank" rel="noopener" style="color:var(--accent);margin-left:auto;">crontab.guru ↗</a>
         </div>
       </div>
+      <div id="sched-rec-builder">
       <div class="field-group">
-        <label class="field-label">Repeat</label>
+        <label class="field-label">Repeat <span class="field-optional">(builder — used only when cron field is empty)</span></label>
         <select id="sched-recurrence" class="board-detail-session-select" style="width:100%;" onchange="updateSchedRecUI()">
           <option value="hourly">Hourly</option>
           <option value="daily" selected>Daily</option>
@@ -11789,6 +12521,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <div class="field-group" id="sched-monthday-field" style="display:none;">
         <label class="field-label">Day of month</label>
         <input id="sched-monthday" type="number" min="1" max="28" value="1" class="board-detail-session-select" style="width:100%;">
+      </div>
       </div>
     </div>
     <div class="field-group" style="margin-top:8px;">
@@ -12531,24 +13264,123 @@ if (_authToken) {
 }
 
 // ── Theme ──
-function _applyTheme(light) {
-  document.body.classList.toggle('light', light);
+// State: { name, light, scanlines, dense } persisted under amux_theme_* keys.
+// name ∈ {github, quiet, glass, phosphor, phosphor-amber, trade}
+// light only applies to {github, quiet, glass}; other themes are dark-only.
+// scanlines only applies to phosphor*; dense only applies to trade.
+const _THEMES_WITH_LIGHT = new Set(['github','quiet','glass']);
+function _themeState() {
+  return {
+    name: localStorage.getItem('amux_theme_name') || 'github',
+    light: localStorage.getItem('amux_theme_light') === '1',
+    scanlines: localStorage.getItem('amux_theme_scanlines') === '1',
+    dense: localStorage.getItem('amux_theme_dense') === '1',
+    accent: localStorage.getItem('amux_accent') || 'default',
+    density: localStorage.getItem('amux_density') || 'comfortable',
+    animations: localStorage.getItem('amux_animations') !== '0',  // default ON
+  };
+}
+function _applyTheme(state) {
+  if (state === undefined) state = _themeState();
+  // back-compat: original signature was _applyTheme(true|false) for light flag
+  if (typeof state === 'boolean') {
+    const cur = _themeState(); cur.light = state; state = cur;
+  }
+  const body = document.body;
+  Array.from(body.classList).forEach(c => {
+    if (c === 'light' || c === 'scanlines' || c === 'dense' || c.startsWith('theme-')) {
+      body.classList.remove(c);
+    }
+  });
+  if (state.name && state.name !== 'github') body.classList.add('theme-' + state.name);
+  const lightCapable = _THEMES_WITH_LIGHT.has(state.name);
+  if (state.light && lightCapable) body.classList.add('light');
+  if (state.scanlines && (state.name === 'phosphor' || state.name === 'phosphor-amber')) body.classList.add('scanlines');
+  if (state.dense && state.name === 'trade') body.classList.add('dense');
+
+  const sel = document.getElementById('theme-select');
+  if (sel) sel.value = state.name;
   const cb = document.getElementById('theme-checkbox');
-  if (cb) cb.checked = light;
+  if (cb) { cb.checked = state.light; cb.disabled = !lightCapable; }
   const lbl = document.getElementById('theme-label');
-  if (lbl) lbl.textContent = light ? 'Light mode' : 'Dark mode';
+  if (lbl) lbl.textContent = !lightCapable ? 'Dark only' : (state.light ? 'Light mode' : 'Dark mode');
+  const lightRow = document.getElementById('theme-light-row');
+  if (lightRow) lightRow.style.opacity = lightCapable ? '1' : '0.45';
+  const scanRow = document.getElementById('theme-scanlines-row');
+  const isPhosphor = (state.name === 'phosphor' || state.name === 'phosphor-amber');
+  if (scanRow) scanRow.style.display = isPhosphor ? '' : 'none';
+  const scanCb = document.getElementById('theme-scanlines-checkbox');
+  if (scanCb) scanCb.checked = state.scanlines;
+  const denseRow = document.getElementById('theme-dense-row');
+  if (denseRow) denseRow.style.display = state.name === 'trade' ? '' : 'none';
+  const denseCb = document.getElementById('theme-dense-checkbox');
+  if (denseCb) denseCb.checked = state.dense;
+
+  // Tweaks: accent override, density scale, animations toggle
+  if (state.accent && state.accent !== 'default') body.setAttribute('data-accent', state.accent);
+  else body.removeAttribute('data-accent');
+  body.setAttribute('data-density', state.density || 'comfortable');
+  body.setAttribute('data-anim', state.animations ? 'on' : 'off');
+  const accSel = document.getElementById('theme-accent-select');
+  if (accSel) accSel.value = state.accent;
+  const denSel = document.getElementById('theme-density-select');
+  if (denSel) denSel.value = state.density;
+  const animCb = document.getElementById('theme-animations-checkbox');
+  if (animCb) animCb.checked = state.animations;
+
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.content = light ? '#ffffff' : '#0d1117';
+  if (meta) {
+    let c = '#0d1117';
+    if (state.name === 'github')        c = state.light ? '#ffffff' : '#0d1117';
+    else if (state.name === 'quiet')    c = state.light ? '#ffffff' : '#0a0a0a';
+    else if (state.name === 'glass')    c = state.light ? '#f5f5f7' : '#0e1117';
+    else if (state.name === 'phosphor') c = '#050a05';
+    else if (state.name === 'phosphor-amber') c = '#0a0703';
+    else if (state.name === 'trade')    c = '#000000';
+    meta.content = c;
+  }
+}
+function setThemeName(name) {
+  localStorage.setItem('amux_theme_name', name);
+  _applyTheme();
 }
 function toggleTheme(checked) {
   const isLight = checked !== undefined ? checked : !document.body.classList.contains('light');
+  localStorage.setItem('amux_theme_light', isLight ? '1' : '0');
   localStorage.setItem('amux_theme', isLight ? 'light' : 'dark');
-  _applyTheme(isLight);
+  _applyTheme();
+}
+function toggleScanlines(checked) {
+  localStorage.setItem('amux_theme_scanlines', checked ? '1' : '0');
+  _applyTheme();
+}
+function toggleDense(checked) {
+  localStorage.setItem('amux_theme_dense', checked ? '1' : '0');
+  _applyTheme();
+}
+function setAccent(v) {
+  if (!v || v === 'default') localStorage.removeItem('amux_accent');
+  else localStorage.setItem('amux_accent', v);
+  _applyTheme();
+}
+function setDensity(v) {
+  localStorage.setItem('amux_density', v || 'comfortable');
+  _applyTheme();
+}
+function toggleAnimations(checked) {
+  localStorage.setItem('amux_animations', checked ? '1' : '0');
+  _applyTheme();
 }
 (function initTheme() {
-  const saved = localStorage.getItem('amux_theme');
-  const preferLight = saved ? saved === 'light' : window.matchMedia('(prefers-color-scheme: light)').matches;
-  _applyTheme(preferLight);
+  const legacy = localStorage.getItem('amux_theme');
+  if (legacy && !localStorage.getItem('amux_theme_light')) {
+    localStorage.setItem('amux_theme_light', legacy === 'light' ? '1' : '0');
+  }
+  if (!localStorage.getItem('amux_theme_light')) {
+    const preferLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+    localStorage.setItem('amux_theme_light', preferLight ? '1' : '0');
+  }
+  _applyTheme();
 })();
 
 // ── Auto-compact toggle ──
@@ -15643,7 +16475,8 @@ async function _peekLoadSchedules() {
           nextRun + lastRun +
         '</span>' +
         '<div style="display:flex;gap:4px;margin-top:4px;">' +
-          '<button class="btn" style="font-size:0.7rem;padding:2px 8px;" onclick="event.stopPropagation();_peekToggleSchedule(\'' + esc(s.id) + '\',' + (s.enabled ? 0 : 1) + ')">' + (s.enabled ? 'Disable' : 'Enable') + '</button>' +
+          '<button class="btn" style="font-size:0.7rem;padding:2px 8px;" onclick="event.stopPropagation();openSchedModal(\'' + esc(s.id) + '\')">Edit</button>' +
+          '<button class="btn" style="font-size:0.7rem;padding:2px 8px;" onclick="event.stopPropagation();_peekToggleSchedule(\'' + esc(s.id) + '\',' + (s.enabled ? 0 : 1) + ')">' + (s.enabled ? 'Pause' : 'Resume') + '</button>' +
           '<button class="btn" style="font-size:0.7rem;padding:2px 8px;" onclick="event.stopPropagation();_peekRunSchedule(\'' + esc(s.id) + '\')">Run now</button>' +
           '<button class="btn" style="font-size:0.7rem;padding:2px 8px;color:var(--red);" onclick="event.stopPropagation();_peekDeleteSchedule(\'' + esc(s.id) + '\')">Delete</button>' +
         '</div>' +
@@ -15671,21 +16504,8 @@ async function _peekDeleteSchedule(id) {
   _peekLoadSchedules();
 }
 function _peekNewSchedule() {
-  const title = prompt('Schedule title:');
-  if (!title) return;
-  const command = prompt('Command to send to session:');
-  if (!command) return;
-  const expr = prompt('Cron expression (e.g. "0 9 * * 1" for Mon 9am), or leave blank for one-time:');
-  const body = {
-    title, session: peekSession, command, kind: 'tmux',
-    sched_type: expr ? 'recurring' : 'once',
-  };
-  if (expr) body.schedule_expr = expr;
-  else body.run_at = new Date().toISOString().slice(0, 16);
-  apiCall(API + '/api/schedules', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify(body)
-  }).then(() => _peekLoadSchedules());
+  if (!peekSession) return;
+  openSchedModal(null, { session: peekSession });
 }
 
 // ── Peek notes ──
@@ -23016,8 +23836,40 @@ function updateSchedKindUI() {
   const watchSection = document.getElementById('sched-watch');
   if (watchSection && kind === 'shell') { watchSection.checked = false; updateSchedWatchUI(); }
 }
-function openSchedModal(editId) {
+let _schedExprTimer = null;
+function updateSchedExprUI() {
+  const exprEl = document.getElementById('sched-expr');
+  const builder = document.getElementById('sched-rec-builder');
+  const preview = document.getElementById('sched-expr-preview');
+  if (!exprEl || !preview) return;
+  const v = (exprEl.value || '').trim();
+  if (builder) builder.style.display = v ? 'none' : '';
+  if (!v) { preview.textContent = ''; preview.style.color = 'var(--dim)'; return; }
+  preview.textContent = '…parsing';
+  preview.style.color = 'var(--dim)';
+  if (_schedExprTimer) clearTimeout(_schedExprTimer);
+  _schedExprTimer = setTimeout(async () => {
+    try {
+      const r = await fetch(API + '/api/schedules/preview', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ schedule_expr: v })
+      });
+      const j = await r.json();
+      if (j.ok) {
+        preview.textContent = '→ next run: ' + j.next_run.replace('T',' ') + (j.human ? '  (' + j.human + ')' : '');
+        preview.style.color = 'var(--green,#3fb950)';
+      } else {
+        preview.textContent = '✗ invalid expression';
+        preview.style.color = 'var(--red,#f97316)';
+      }
+    } catch(e) {
+      preview.textContent = '';
+    }
+  }, 300);
+}
+function openSchedModal(editId, opts) {
   _schedEditId = editId || null;
+  opts = opts || {};
   const overlay = document.getElementById('sched-overlay');
   // Populate session list
   const sel = document.getElementById('sched-session');
@@ -23051,11 +23903,16 @@ function openSchedModal(editId) {
     document.getElementById('sched-done-action').value = 'disable';
     document.getElementById('sched-watch-timeout').value = 120;
     document.getElementById('sched-save-btn').textContent = 'Save';
+    if (opts.session) {
+      // Pre-fill session when launched from per-session peek panel
+      try { sel.value = opts.session; } catch(e) {}
+    }
   }
   updateSchedTypeUI();
   updateSchedRecUI();
   updateSchedWatchUI();
   updateSchedKindUI();
+  updateSchedExprUI();
   overlay.style.display = 'flex';
   requestAnimationFrame(() => overlay.classList.add('active'));
   setTimeout(() => document.getElementById('sched-title').focus(), 50);
@@ -23095,7 +23952,15 @@ async function saveSchedModal() {
   const donePattern = document.getElementById('sched-done-pattern').value.trim();
   const doneAction = document.getElementById('sched-done-action').value;
   const watchTimeout = parseInt(document.getElementById('sched-watch-timeout').value) || 120;
-  const payload = { title, session, kind, command, sched_type: stype, recurrence: recurrence || null, run_at,
+  // When a cron/expr is provided, it is the source of truth — drop the builder fields
+  // so the saved schedule isn't a hybrid of both.
+  const effectiveStype = schedExpr ? 'recurring' : stype;
+  const effectiveRecurrence = schedExpr ? null : (recurrence || null);
+  const effectiveRunAt = schedExpr ? null : run_at;
+  const payload = { title, session, kind, command,
+                    sched_type: effectiveStype,
+                    recurrence: effectiveRecurrence,
+                    run_at: effectiveRunAt,
                     schedule_expr: schedExpr || null,
                     watch, done_pattern: donePattern || null, done_action: doneAction, watch_timeout: watchTimeout };
   const url = _schedEditId ? API + '/api/schedules/' + _schedEditId : API + '/api/schedules';
@@ -23105,6 +23970,8 @@ async function saveSchedModal() {
     await fetchSchedules();
     renderCalendar();
     renderScheduler();
+    // Also refresh per-session peek list if it is currently open
+    try { if (typeof _peekLoadSchedules === 'function' && peekSession) _peekLoadSchedules(); } catch(e) {}
     closeSchedModal();
   }
 }
@@ -25403,6 +26270,59 @@ async function saveApiKey() {
   } catch(e) { if (st) st.textContent = 'Error: ' + e.message; }
 }
 
+// ── Pushover ───────────────────────────────────────────────────────────────────
+async function loadPushoverKeys() {
+  try {
+    const r = await fetch('/api/settings/env');
+    const data = await r.json();
+    const tInp = document.getElementById('settings-pushover-token');
+    const uInp = document.getElementById('settings-pushover-user');
+    const st = document.getElementById('settings-pushover-status');
+    if (tInp) tInp.placeholder = data.AMUX_PUSHOVER_TOKEN || 'a…';
+    if (uInp) uInp.placeholder = data.AMUX_PUSHOVER_USER || 'u…';
+    if (st) st.textContent = (data.AMUX_PUSHOVER_TOKEN && data.AMUX_PUSHOVER_USER) ? 'Keys saved ✓' : 'No keys set';
+  } catch(e) {}
+}
+
+async function savePushoverKeys() {
+  const tInp = document.getElementById('settings-pushover-token');
+  const uInp = document.getElementById('settings-pushover-user');
+  const st = document.getElementById('settings-pushover-status');
+  const token = tInp ? tInp.value.trim() : '';
+  const user  = uInp ? uInp.value.trim() : '';
+  if (!token && !user) return;
+  st && (st.textContent = 'Saving…');
+  const body = {};
+  if (token) body.AMUX_PUSHOVER_TOKEN = token;
+  if (user)  body.AMUX_PUSHOVER_USER  = user;
+  try {
+    const r = await fetch('/api/settings/env', {method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)});
+    if (r.ok) {
+      if (tInp) tInp.value = '';
+      if (uInp) uInp.value = '';
+      if (st) st.textContent = 'Saved ✓';
+      await loadPushoverKeys();
+    } else {
+      if (st) st.textContent = 'Save failed';
+    }
+  } catch(e) { if (st) st.textContent = 'Error: ' + e.message; }
+}
+
+async function sendPushoverTest() {
+  const st = document.getElementById('settings-pushover-status');
+  st && (st.textContent = 'Sending…');
+  try {
+    const r = await fetch('/api/pushover/test', {method:'POST'});
+    if (r.ok) {
+      if (st) st.textContent = 'Test sent ✓';
+    } else {
+      const d = await r.json().catch(()=>({}));
+      if (st) st.textContent = d.error || 'Send failed';
+    }
+  } catch(e) { if (st) st.textContent = 'Error: ' + e.message; }
+}
+
 // ── Team / Org / Invites ──────────────────────────────────────────────────────
 async function loadTeamSection() {
   try {
@@ -25578,6 +26498,7 @@ toggleSettings = function() {
     loadTeamSection();
     loadApiKeys();
     loadBillingSection();
+    loadPushoverKeys();
   }
 };
 
@@ -25619,6 +26540,47 @@ async function _handleDeeplink(hash) {
 }
 // On page load
 _handleDeeplink(location.hash);
+// Embedded mode (iframed from /redesign) + ?view=X auto-switch
+(function _amuxEmbeddedBoot(){
+  try {
+    var p = new URLSearchParams(location.search);
+    var embedded = p.get('embedded') === '1';
+    var view = p.get('view');
+    if (embedded) {
+      document.documentElement.setAttribute('data-embedded', '1');
+      // Skip the onboarding walkthrough when embedded inside the redesign —
+      // the host shell already provides primary navigation.
+      try { localStorage.setItem('amux_walkthrough_done', '1'); } catch(e) {}
+      var st = document.createElement('style');
+      st.textContent = (
+        "html[data-embedded='1'] .tab-bar-outer," +
+        "html[data-embedded='1'] #chrome-tabs-bar," +
+        "html[data-embedded='1'] #chrome-tab-frames," +
+        "html[data-embedded='1'] #no-apikey-banner," +
+        "html[data-embedded='1'] #org-banner," +
+        "html[data-embedded='1'] #org-invite-banner," +
+        "html[data-embedded='1'] #wt-overlay," +
+        "html[data-embedded='1'] .header-row { display: none !important; }" +
+        "html[data-embedded='1'] body { padding-top: 0 !important; --chrome-tab-h: 0px !important; }"
+      );
+      document.head.appendChild(st);
+    }
+    if (view) {
+      // Poll for switchView to be defined (legacy dashboard's inline scripts
+      // run after this snippet). Try for up to 5 seconds.
+      var tries = 0;
+      var iv = setInterval(function(){
+        tries++;
+        if (typeof window.switchView === 'function') {
+          clearInterval(iv);
+          try { window.switchView(view); } catch(e){}
+        } else if (tries > 50) {
+          clearInterval(iv);
+        }
+      }, 100);
+    }
+  } catch(e) {}
+})();
 // Restore peek state from sessionStorage (survives refresh)
 try {
   const _ps = JSON.parse(sessionStorage.getItem('peekState') || 'null');
@@ -26278,9 +27240,10 @@ function _metricsRender() {
   </div>`;
 
   if (!sys.psutil) {
+    const py = sys.python_executable || 'python3';
     html += `<div class="metrics-no-psutil">
       \u26A0\uFE0F Process-level CPU &amp; RAM per session requires psutil &mdash;
-      run <code>pip3 install psutil</code> then restart the server.
+      run <code>${esc(py)} -m pip install psutil</code> then restart the server.
       System metrics are shown via fallback commands.
     </div>`;
   }
@@ -30717,9 +31680,29 @@ class CCHandler(BaseHTTPRequestHandler):
         if not self._check_auth(method, path):
             return
 
-        # GET /
-        if method == "GET" and path == "/":
+        # GET / or /legacy — main dashboard.
+        #   /          → redesign by default (Claude Design refresh, 2026-05-11)
+        #              fallback to legacy if ?legacy=1 or query/hash specifies a legacy-only path
+        #   /legacy    → always the original DASHBOARD_HTML
+        if method == "GET" and path in ("/", "/legacy"):
             import json as _json
+            from urllib.parse import parse_qsl as _parse_qsl
+            raw_qs = urlparse(self.path).query
+            qs = dict(_parse_qsl(raw_qs)) if raw_qs else {}
+            want_redesign = (
+                path == "/"
+                and qs.get("legacy", "0") not in ("1", "true", "yes")
+                and qs.get("view") is None  # legacy view links keep legacy
+                and qs.get("path") is None  # legacy file deeplinks keep legacy
+            )
+            if want_redesign:
+                # 302 to /redesign so cookies + service-worker scope behave consistently
+                self.send_response(302)
+                self._cors()
+                self.send_header("Location", "/redesign")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             _user_email = self.headers.get("X-Amux-User-Email", "")
             _user_id = self.headers.get("X-Amux-User-Id", "")
             page = DASHBOARD_HTML.replace(
@@ -30756,6 +31739,56 @@ class CCHandler(BaseHTTPRequestHandler):
         # GET /release-notes — standalone SEO-indexable release notes page
         if method == "GET" and path == "/release-notes":
             return self._html(RELEASE_NOTES_HTML)
+
+        # GET /redesign — Claude Design handoff preview, bundled from docs/redesign/project/
+        if method == "GET" and path == "/redesign":
+            import json as _json
+            base = Path(__file__).parent / "docs" / "redesign" / "project"
+            if not base.exists():
+                return self._html("<h2>Redesign assets not found at docs/redesign/project/</h2><p>Run from a checkout that includes the handoff bundle.</p>")
+            css_files = ["src/tokens.css", "src/base.css", "src/components.css", "src/app.css"]
+            jsx_files = [
+                "src/tweaks-panel.jsx", "src/store.jsx", "src/icons.jsx",
+                "src/sessions.jsx", "src/peek.jsx", "src/palette.jsx",
+                "src/secondary.jsx", "src/shell.jsx", "src/workspace-tabs.jsx",
+                "src/tweaks.jsx", "src/walkthrough.jsx", "src/app.jsx",
+            ]
+            css_parts = []
+            for f in css_files:
+                p = base / f
+                if p.exists():
+                    css_parts.append(f"/* === {f} === */\n" + p.read_text(encoding="utf-8"))
+            jsx_parts = []
+            for f in jsx_files:
+                p = base / f
+                if p.exists():
+                    jsx_parts.append(f"// === {f} ===\n" + p.read_text(encoding="utf-8"))
+            css_blob = "\n".join(css_parts)
+            jsx_blob = "\n".join(jsx_parts)
+            page = (
+                "<!doctype html>\n"
+                "<html lang=\"en\">\n<head>\n"
+                "<meta charset=\"utf-8\" />\n"
+                "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\" />\n"
+                "<meta name=\"theme-color\" content=\"#0a0a0b\" />\n"
+                "<title>amux — Redesign Preview</title>\n"
+                "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\" />\n"
+                "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin />\n"
+                "<link href=\"https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap\" rel=\"stylesheet\" />\n"
+                "<style>\n" + css_blob + "\n</style>\n"
+                "<script>window._AMUX_AUTH_TOKEN=" + _json.dumps(AUTH_TOKEN) + ";</script>\n"
+                "</head>\n<body>\n<div id=\"root\"></div>\n"
+                "<script crossorigin src=\"https://unpkg.com/react@18.3.1/umd/react.development.js\"></script>\n"
+                "<script crossorigin src=\"https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js\"></script>\n"
+                "<script src=\"https://unpkg.com/@babel/standalone@7.29.0/babel.min.js\"></script>\n"
+                "<script type=\"text/babel\" data-presets=\"react\">\n"
+                + jsx_blob +
+                "\nfunction Root(){return <><App /><Walkthrough /></>;}\n"
+                "const root = ReactDOM.createRoot(document.getElementById('root'));\n"
+                "root.render(<Root />);\n"
+                "</script>\n</body>\n</html>\n"
+            )
+            return self._html(page)
 
         # GET /api/release-notes — paginated JSON from docs/release-notes/notes.json
         if method == "GET" and path.startswith("/api/release-notes"):
@@ -31207,6 +32240,10 @@ class CCHandler(BaseHTTPRequestHandler):
                 body.setdefault("level", "info")
                 items.insert(0, body)
                 _notif_save(items)
+                _send_pushover(
+                    body.get("title", "amux notification"),
+                    body.get("body", body.get("message", "")),
+                )
                 return self._json({"ok": True, "id": body["id"]})
 
         if path.startswith("/api/notifications/"):
@@ -31790,6 +32827,79 @@ class CCHandler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "output": output}, 500)
             except Exception as e:
                 return self._json({"ok": False, "output": str(e)}, 500)
+
+        # POST /api/webhooks/sms/<session> — SMS Eagle inbound webhook
+        if method == "POST" and path.startswith("/api/webhooks/sms/"):
+            session_name = path[len("/api/webhooks/sms/"):]
+            if not session_name:
+                return self._json({"error": "missing session name"}, 400)
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length > 0 else b""
+            ct = self.headers.get("Content-Type", "")
+            slog(f"[sms-webhook] ct={ct!r} raw={raw!r}")
+            if "application/json" in ct:
+                try:
+                    payload = json.loads(raw)
+                except Exception:
+                    return self._json({"error": "invalid JSON"}, 400)
+                sender = payload.get("from", payload.get("sender", "unknown"))
+                message = (payload.get("message_text") or payload.get("text") or
+                           payload.get("body") or payload.get("msg") or "")
+            else:
+                fields = {k: v[0] for k, v in parse_qs(raw.decode("utf-8", errors="replace")).items()}
+                slog(f"[sms-webhook] fields={fields}")
+                sender = fields.get("from", fields.get("modem_no", "unknown"))
+                message = (fields.get("message_text") or fields.get("text") or
+                           fields.get("body") or fields.get("msg") or "")
+            if not message:
+                return self._json({"error": "no message body", "fields": list(fields.keys()) if "application/json" not in ct else list(payload.keys())}, 400)
+            text = f"SMS from {sender}: {message}"
+            ok, msg = send_text(session_name, text)
+            slog(f"[sms-webhook] session={session_name} from={sender} ok={ok}")
+            code = 200 if ok else (409 if msg == "not running" else 500)
+            return self._json({"ok": ok, "message": msg}, code)
+
+        # GET|POST /api/webhooks/smartertrack/<session> — SmarterTrack new-chat webhook
+        if method in ("GET", "POST") and path.startswith("/api/webhooks/smartertrack/"):
+            session_name = path[len("/api/webhooks/smartertrack/"):]
+            if not session_name:
+                return self._json({"error": "missing session name"}, 400)
+            if method == "GET":
+                return self._json({"ok": True})
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length > 0 else b""
+            ct = self.headers.get("Content-Type", "")
+            slog(f"[smartertrack-webhook] ct={ct!r} raw={raw!r}")
+            try:
+                if "application/json" in ct:
+                    payload = json.loads(raw) if raw else {}
+                else:
+                    fields = {k: v[0] for k, v in parse_qs(raw.decode("utf-8", errors="replace")).items()}
+                    payload = fields
+                slog(f"[smartertrack-webhook] payload={payload}")
+            except Exception as e:
+                return self._json({"error": f"parse error: {e}"}, 400)
+            customer = (payload.get("customerName") or payload.get("customer_name") or
+                        payload.get("name") or payload.get("displayName") or "unknown")
+            email = payload.get("email") or payload.get("customerEmail") or ""
+            chat_id = payload.get("chatId") or payload.get("chat_id") or payload.get("id") or ""
+            dept = payload.get("department") or payload.get("departmentName") or ""
+            initial_msg = (payload.get("message") or payload.get("initialMessage") or
+                           payload.get("body") or payload.get("text") or "")
+            parts = [f"New SmarterTrack chat from {customer}"]
+            if email:
+                parts.append(f"Email: {email}")
+            if dept:
+                parts.append(f"Department: {dept}")
+            if chat_id:
+                parts.append(f"Chat ID: {chat_id}")
+            if initial_msg:
+                parts.append(f"Message: {initial_msg}")
+            text = "\n".join(parts)
+            ok, msg = send_text(session_name, text)
+            slog(f"[smartertrack-webhook] session={session_name} customer={customer} ok={ok}")
+            code = 200 if ok else (409 if msg == "not running" else 500)
+            return self._json({"ok": ok, "message": msg}, code)
 
         # GET /api/metrics — system + per-session resource metrics
         if method == "GET" and path == "/api/metrics":
@@ -32719,6 +33829,34 @@ class CCHandler(BaseHTTPRequestHandler):
                 self._json([dict(r) for r in rows])
                 return
 
+            # POST /api/schedules/preview — dry-run parse for live UI feedback
+            if method == "POST" and path == "/api/schedules/preview":
+                data = self._read_body()
+                expr = (data.get("schedule_expr") or "").strip()
+                if not expr:
+                    self._json({"ok": False, "error": "empty"}); return
+                nxt = _parse_next_run(expr)
+                if not nxt:
+                    self._json({"ok": False, "error": "invalid"}); return
+                human = None
+                try:
+                    secs = int((_dt.fromisoformat(nxt) - _dt.now()).total_seconds())
+                    if secs < 0:
+                        human = "now"
+                    elif secs < 60:
+                        human = f"in {secs}s"
+                    elif secs < 3600:
+                        human = f"in {secs // 60}m"
+                    elif secs < 86400:
+                        h, m = secs // 3600, (secs % 3600) // 60
+                        human = f"in {h}h {m}m" if m else f"in {h}h"
+                    else:
+                        d, h = secs // 86400, (secs % 86400) // 3600
+                        human = f"in {d}d {h}h" if h else f"in {d}d"
+                except Exception:
+                    pass
+                self._json({"ok": True, "next_run": nxt, "human": human}); return
+
             # POST /api/schedules
             if method == "POST" and path == "/api/schedules":
                 db = get_db()
@@ -32727,7 +33865,7 @@ class CCHandler(BaseHTTPRequestHandler):
                 sid = _next_issue_id("SCHED")
                 stype = data.get("sched_type", "once")
                 schedule_expr = (data.get("schedule_expr") or "").strip()
-                run_at = data.get("run_at", _dt.now().strftime("%Y-%m-%dT%H:%M"))
+                run_at = data.get("run_at") or _dt.now().strftime("%Y-%m-%dT%H:%M")
                 sched = {
                     "id": sid, "title": data.get("title", ""),
                     "session": data.get("session", ""),
@@ -34099,7 +35237,7 @@ return "not_found"
 
         # ── Settings env (ANTHROPIC_API_KEY etc.) ─────────────────────────────
         if path == "/api/settings/env":
-            _allowed_env_keys = {"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}
+            _allowed_env_keys = {"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AMUX_PUSHOVER_TOKEN", "AMUX_PUSHOVER_USER"}
             if method == "GET":
                 result = {}
                 for k in _allowed_env_keys:
@@ -34143,6 +35281,15 @@ return "not_found"
                     except Exception:
                         pass
                 return self._json({"ok": True})
+
+        # ── Pushover test ──────────────────────────────────────────────────────
+        if path == "/api/pushover/test" and method == "POST":
+            token = os.environ.get("AMUX_PUSHOVER_TOKEN", "")
+            user  = os.environ.get("AMUX_PUSHOVER_USER", "")
+            if not token or not user:
+                return self._json({"error": "Pushover keys not configured"}, 400)
+            _send_pushover("amux — test", "Pushover notifications are working!")
+            return self._json({"ok": True})
 
         # ── Org / Team / Invites ──────────────────────────────────────────────
         if path.startswith("/api/org") or path.startswith("/invite/"):
