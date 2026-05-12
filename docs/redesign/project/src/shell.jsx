@@ -54,7 +54,7 @@ function Sidebar({ collapsed, setCollapsed, tab, setTab, openTweaks, openPalette
         </button>
         <span className="spacer"></span>
         {/* Notifications bell */}
-        <button className="btn btn--icon btn--ghost btn--sm"
+        <button className="btn btn--icon btn--ghost btn--sm sb-head-action"
           title={`Notifications${notifCount ? ` (${notifCount})` : ''}`}
           onClick={() => { setNotifOpen(v => !v); setAddOpen(false); }}
           style={{position:'relative'}}>
@@ -69,7 +69,7 @@ function Sidebar({ collapsed, setCollapsed, tab, setTab, openTweaks, openPalette
           )}
         </button>
         {/* Add menu */}
-        <button className="btn btn--icon btn--ghost btn--sm" title="Add…"
+        <button className="btn btn--icon btn--ghost btn--sm sb-head-action" title="Add…"
           onClick={() => { setAddOpen(v => !v); setNotifOpen(false); }}>
           {I.plus}
         </button>

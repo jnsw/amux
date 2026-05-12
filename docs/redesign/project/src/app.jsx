@@ -130,7 +130,7 @@ function App() {
   }
 
   return (
-    <div className="app" data-sidebar={sidebarPos} data-nav={navMode}>
+    <div className="app" data-sidebar={sidebarPos} data-nav={navMode} data-sidebar-collapsed={collapsed ? '1' : '0'}>
       {navMode === 'sidebar' && (
         <Sidebar collapsed={collapsed} setCollapsed={setCollapsed} tab={tab} setTab={setTab} openTweaks={() => setTab('settings')} openPalette={() => setPaletteOpen(true)} onNewSession={() => setNewOpen(true)} />
       )}
@@ -152,7 +152,7 @@ function App() {
       </main>
 
       {selected && tab === 'sessions' && (
-        <PeekPanel name={selected} onClose={() => setSelected(null)} />
+        <PeekPanel name={selected} onClose={() => setSelected(null)} onSwitch={selectSession} />
       )}
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)}

@@ -174,12 +174,15 @@ function renderCCStream(rawText) {
   return out.join('');
 }
 
-function PeekPanel({ name, onClose }) {
+function PeekPanel({ name, onClose, onSwitch }) {
   const s = store.sessions.find((x) => x.name === name);
   const [tab, setTab] = useStateP("output");
   const [composer, setComposer] = useStateP("");
   const [steerMode, setSteerMode] = useStateP(false);
-  const [fullscreen, setFullscreen] = useStateP(false);
+  const [fullscreen, setFullscreen] = useStateP(true);
+  const [siderCollapsed, setSiderCollapsed] = useStateP(false);
+  const [siderQuery, setSiderQuery] = useStateP("");
+  useEffectP(() => { setFullscreen(true); }, [name]);
   const [searchOpen, setSearchOpen] = useStateP(false);
   const [query, setQuery] = useStateP("");
   const [activeMatch, setActiveMatch] = useStateP(0);
@@ -366,6 +369,55 @@ function PeekPanel({ name, onClose }) {
 
   return (
     <aside className="peek" data-fullscreen={fullscreen ? '1' : '0'} role="dialog" aria-label={`Session ${s.name}`}>
+      {fullscreen && (
+        <aside className="peek__sider" data-collapsed={siderCollapsed ? '1' : '0'} aria-label="Sessions">
+          <div className="peek__sider__head">
+            <button className="btn btn--icon btn--ghost btn--sm"
+              title={siderCollapsed ? "Expand session list" : "Collapse session list"}
+              onClick={() => setSiderCollapsed(v => !v)}>
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d={siderCollapsed ? "M6 4l4 4-4 4" : "M10 4L6 8l4 4"}/>
+              </svg>
+            </button>
+            {!siderCollapsed && (
+              <>
+                <span className="peek__sider__title">Sessions</span>
+                <span className="faint" style={{fontSize:11}}>{store.sessions.length}</span>
+              </>
+            )}
+          </div>
+          {!siderCollapsed && (
+            <>
+              <div style={{padding:'6px 8px', borderBottom:'1px solid var(--border)'}}>
+                <input
+                  className="input"
+                  style={{height:24, fontSize:12, width:'100%'}}
+                  placeholder="Filter…"
+                  value={siderQuery}
+                  onChange={(e) => setSiderQuery(e.target.value)}
+                />
+              </div>
+              <div className="peek__sider__list">
+                {store.sessions
+                  .filter(x => !siderQuery || x.name.toLowerCase().includes(siderQuery.toLowerCase()))
+                  .map(x => (
+                  <button
+                    key={x.name}
+                    className="peek__sider__item"
+                    aria-current={x.name === name ? 'page' : undefined}
+                    onClick={() => onSwitch && onSwitch(x.name)}
+                    title={x.name}>
+                    <StatusDot status={x.status} />
+                    <span className="peek__sider__name">{x.name}</span>
+                    {x.status === 'active' && <span className="dot dot--active" aria-hidden="true" />}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </aside>
+      )}
+      <div className="peek__main">
       <div className="peek__head">
         <StatusDot status={s.status} />
         <span className="peek__name truncate">{s.name}</span>
@@ -692,6 +744,7 @@ function PeekPanel({ name, onClose }) {
           </div>
         </div>
       )}
+      </div>{/* /peek__main */}
 
       {historyOpen && (
         <div className="modal" style={{ position: 'fixed', inset: 0, zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklch, var(--bg) 70%, transparent)' }}
