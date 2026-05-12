@@ -8442,129 +8442,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .overlay-body .md-link { color: var(--yellow); text-decoration: none; border-bottom: 1px dashed var(--yellow); cursor: pointer; }
   .overlay-body .md-link:active { color: #e8c547; }
   .overlay-status { color: var(--dim); font-size: 0.75rem; margin-top: 6px; flex-shrink: 0; text-align: center; }
-
-  /* ── Claude-Code terminal stream (cc-stream) ──
-     Renders inside .overlay-body or grid pane bodies. Heuristically structured
-     from raw tmux output: user prompts, tool calls (● Name(args) + ⎿ result),
-     status footers, prose, blank lines. ANSI colors preserved as <span style>. */
-  .cc-stream {
-    position: relative;
-    padding: 4px 0 6px 14px;
-    white-space: normal;
-    font-family: "JetBrains Mono", "SF Mono", "Fira Code", "Cascadia Code", monospace;
-    font-size: 0.78rem; line-height: 1.55;
-    color: var(--fg);
-  }
-  /* gradient left rail that hugs the whole conversation */
-  .cc-stream::before {
-    content: "";
-    position: absolute; left: 4px; top: 8px; bottom: 8px;
-    width: 2px; border-radius: 1px; pointer-events: none;
-    background: linear-gradient(to bottom,
-      transparent 0,
-      color-mix(in oklab, var(--accent) 38%, transparent) 18px,
-      color-mix(in oklab, var(--accent) 18%, transparent) 50%,
-      transparent 100%);
-  }
-  .cc-stream .cc-prose,
-  .cc-stream .cc-userpill,
-  .cc-stream .cc-tool,
-  .cc-stream .cc-status,
-  .cc-stream .cc-callout { display: block; }
-
-  /* prose paragraph (default fallback line) */
-  .cc-stream .cc-prose {
-    margin: 1px 0; color: var(--fg);
-    white-space: pre-wrap; word-break: break-word;
-  }
-  .cc-stream .cc-prose .tok { color: color-mix(in oklab, var(--accent) 70%, var(--fg)); font-weight: 500; }
-
-  /* user prompt pill */
-  .cc-stream .cc-userpill {
-    margin: 6px 0 4px -10px;
-    padding: 6px 12px 6px 10px;
-    border-left: 2px solid color-mix(in oklab, var(--accent) 70%, transparent);
-    border-radius: 0 6px 6px 0;
-    background: linear-gradient(to right,
-      color-mix(in oklab, var(--accent) 12%, transparent) 0,
-      color-mix(in oklab, var(--accent) 4%, transparent) 40%,
-      transparent 100%);
-    color: var(--fg); white-space: pre-wrap; word-break: break-word;
-  }
-  .cc-stream .cc-userpill .chev {
-    color: var(--accent); font-weight: 600; margin-right: 8px; user-select: none;
-  }
-
-  /* tool call: head row + optional result body */
-  .cc-stream .cc-tool { margin: 4px 0 2px; }
-  .cc-stream .cc-tool__head {
-    display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-    color: var(--fg);
-  }
-  .cc-stream .cc-dot {
-    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-    flex-shrink: 0; align-self: center;
-    background: var(--green);
-    box-shadow: 0 0 0 2px color-mix(in oklab, var(--green) 22%, transparent);
-  }
-  .cc-stream .cc-dot[data-state="run"] {
-    background: transparent;
-    border: 1.5px solid var(--accent);
-    box-shadow: 0 0 8px color-mix(in oklab, var(--accent) 50%, transparent);
-    animation: ccSpin 1.1s linear infinite;
-  }
-  .cc-stream .cc-dot[data-state="err"] {
-    background: var(--red);
-    box-shadow: 0 0 0 2px color-mix(in oklab, var(--red) 22%, transparent);
-  }
-  @keyframes ccSpin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
-  .cc-stream .cc-tool__name { font-weight: 600; color: var(--fg); }
-  .cc-stream .cc-tool__args { color: var(--dim); word-break: break-all; }
-  .cc-stream .cc-tool__args .arg-paren { color: var(--dim); opacity: 0.6; }
-  .cc-stream .cc-tool__result {
-    display: grid; grid-template-columns: 9px 1fr; gap: 8px;
-    margin: 2px 0 0 2px;
-  }
-  .cc-stream .cc-tool__cont {
-    color: var(--dim); opacity: 0.55; text-align: center;
-    user-select: none; font-size: 0.9em;
-  }
-  .cc-stream .cc-tool__body { min-width: 0; color: var(--dim); }
-  .cc-stream .cc-lines {
-    margin-top: 2px; padding: 6px 8px;
-    background: color-mix(in oklab, var(--card) 60%, transparent);
-    border: 1px solid var(--border); border-radius: 6px;
-    white-space: pre-wrap; word-break: break-word;
-  }
-  .cc-stream .cc-lines .ln { display: block; }
-
-  /* status footer (e.g. ✻ Worked for 1m 24s) */
-  .cc-stream .cc-status {
-    margin: 4px 0 2px; color: var(--dim);
-    font-size: 0.95em; letter-spacing: .02em;
-  }
-  .cc-stream .cc-status .star { color: var(--accent); margin-right: 6px; }
-
-  /* blank line spacer */
-  .cc-stream .cc-blank { display: block; height: .55em; }
-
-  /* keep search-highlight readable */
-  .cc-stream mark, .overlay-body mark {
-    background: color-mix(in oklab, var(--yellow) 60%, transparent);
-    color: inherit; padding: 0 1px; border-radius: 2px;
-  }
-
-  /* link styles inside cc-stream (override the .overlay-body pre rule) */
-  .cc-stream a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
-  .cc-stream .file-link { color: var(--cyan, var(--accent)); border-bottom: 1px dashed currentColor; cursor: pointer; }
-  .cc-stream .md-link   { color: var(--yellow); border-bottom: 1px dashed currentColor; cursor: pointer; }
-
-  /* when cc-stream lives inside overlay-body, relax the pre/whitespace */
-  .overlay-body:has(.cc-stream) { white-space: normal; padding: 6px 4px 10px 4px; }
-  @media (max-width: 768px) {
-    .cc-stream { padding-left: 12px; font-size: 0.76rem; }
-    .cc-stream .cc-userpill { margin-left: -8px; padding: 6px 10px; }
-  }
   .scroll-lock-badge {
     position: sticky; bottom: 0; left: 0; right: 0;
     text-align: center; padding: 6px 0;
@@ -17169,7 +17046,7 @@ function openPeek(name, opts) {
   _idb.get('peek_' + name).then(cached => {
     if (peekSession !== name) return;  // session changed before cache resolved
     if (cached && (!lastPeekHTML || lastPeekHTML.includes('Loading...'))) {
-      lastPeekHTML = renderCCStream(stripAnsi(cached.output));
+      lastPeekHTML = linkifyOutput(stripAnsi(cached.output));
       applyPeekSearch();
       const ago = Math.floor((Date.now() - cached.time) / 60000);
       document.getElementById('peek-status').textContent = 'Cached ' + (ago < 1 ? 'just now' : ago + 'm ago');
@@ -17453,94 +17330,6 @@ function stripAnsi(text) {
     .replace(/^─{10,}\n?/gm, '');   // Remove decorative separator lines (mobile readability)
 }
 
-/* Heuristic Claude-Code transcript renderer.
-   Input: raw tmux pane text (ANSI already stripped). Output: HTML string wrapped
-   in <div class="cc-stream"> ... </div>, with structured blocks for user prompts
-   (`> …`), tool calls (`● Tool(args)` + indented `⎿` / `└` continuation), status
-   footers (`✻ …`), blank-line spacers, and prose for anything else. URLs and
-   file paths are linkified inside each block via linkifyOutput(). */
-function renderCCStream(rawText) {
-  const text = rawText == null ? '' : String(rawText);
-  if (!text.trim()) return '<div class="cc-stream"></div>';
-  const lines = text.split('\n');
-  const out = ['<div class="cc-stream">'];
-  let i = 0;
-  let consecutiveBlanks = 0;
-  // Matches "● Read(args)", "● Bash(cmd)", "▶ X(y)", "• X(y)". Tool name = first
-  // identifier; args = everything between the first ( and the matching last ).
-  const toolHead = /^[\s]*[●•▶○]\s+([A-Za-z][\w.\-]*)\(([\s\S]*)\)\s*$/;
-  // Continuation lines from Claude Code use ⎿ (U+23BF) or └, indented.
-  const toolCont = /^\s*(?:⎿|└|⌐)\s?(.*)$/;
-  const indented = /^(?:    |\t|  ⎿|  └)/;
-  while (i < lines.length) {
-    const raw = lines[i];
-    const line = raw.replace(/\r$/, '');
-    // 1) Blank line → at most one .cc-blank in a row
-    if (!line.trim()) {
-      if (consecutiveBlanks === 0) out.push('<span class="cc-blank"></span>');
-      consecutiveBlanks++;
-      i++;
-      continue;
-    }
-    consecutiveBlanks = 0;
-    // 2) User prompt: "> some text" (skip lone ">" or git markers)
-    const userM = /^>\s+(\S.*)$/.exec(line);
-    if (userM) {
-      out.push('<div class="cc-userpill"><span class="chev">›</span>'
-               + linkifyOutput(userM[1]) + '</div>');
-      i++;
-      continue;
-    }
-    // 3) Status footer: "✻ Worked for 1m 24s"
-    if (/^[\s]*✻\s/.test(line)) {
-      const rest = line.replace(/^\s*✻\s*/, '');
-      out.push('<div class="cc-status"><span class="star">✻</span>'
-               + linkifyOutput(rest) + '</div>');
-      i++;
-      continue;
-    }
-    // 4) Tool call: "● Read(src/foo.py)" plus optional indented continuation
-    const tm = toolHead.exec(line);
-    if (tm) {
-      const name = tm[1];
-      const args = tm[2];
-      // Gather continuation: next line(s) starting with ⎿/└/indented spaces.
-      const contLines = [];
-      let j = i + 1;
-      while (j < lines.length) {
-        const nxt = lines[j].replace(/\r$/, '');
-        if (!nxt.trim()) break;
-        const cm = toolCont.exec(nxt);
-        if (cm) { contLines.push(cm[1]); j++; continue; }
-        if (indented.test(nxt)) { contLines.push(nxt.replace(/^\s+/, '')); j++; continue; }
-        break;
-      }
-      let head = '<div class="cc-tool"><div class="cc-tool__head">'
-               + '<span class="cc-dot" data-state="ok" aria-hidden="true"></span>'
-               + '<span><span class="cc-tool__name">' + esc(name) + '</span>'
-               + '<span class="cc-tool__args">'
-               + '<span class="arg-paren">(</span>' + linkifyOutput(args) + '<span class="arg-paren">)</span>'
-               + '</span></span></div>';
-      if (contLines.length) {
-        head += '<div class="cc-tool__result">'
-              + '<span class="cc-tool__cont" aria-hidden="true">└</span>'
-              + '<div class="cc-tool__body"><div class="cc-lines">'
-              + contLines.map(l => '<span class="ln">' + linkifyOutput(l) + '</span>').join('')
-              + '</div></div></div>';
-      }
-      head += '</div>';
-      out.push(head);
-      i = j;
-      continue;
-    }
-    // 5) Default: prose line
-    out.push('<div class="cc-prose">' + linkifyOutput(line) + '</div>');
-    i++;
-  }
-  out.push('</div>');
-  return out.join('');
-}
-
 function linkifyOutput(text) {
   // Split text into segments: URLs, file paths, and plain text
   // URL regex: match http/https URLs
@@ -17628,13 +17417,13 @@ async function refreshPeek() {
   const body = document.getElementById('peek-body');
   const statusEl = document.getElementById('peek-status');
   try {
-    const r = await fetch(API + '/api/sessions/' + name + '/peek?full=1');
+    const r = await fetch(API + '/api/sessions/' + name + '/peek?lines=500');
     const data = await r.json();
     if (peekSession !== name) return;
     const output = data.output || '(no output)';
     const atBottom = _isScrolledToBottom(body);
     if (atBottom) _peekScrollLocked = false;
-    const newHTML = renderCCStream(stripAnsi(output));
+    const newHTML = linkifyOutput(stripAnsi(output));
     if (peekSelecting || (window.getSelection()?.toString().length > 0)) return;
     if (_sendingSnapshot && newHTML !== _sendingSnapshot) clearSendingIndicator();
     lastPeekHTML = newHTML;
@@ -17659,7 +17448,7 @@ async function refreshPeek() {
     if (!lastPeekHTML || lastPeekHTML.includes('Loading...')) {
       const cached = await _idb.get('peek_' + peekSession);
       if (cached) {
-        lastPeekHTML = renderCCStream(stripAnsi(cached.output));
+        lastPeekHTML = linkifyOutput(stripAnsi(cached.output));
         applyPeekSearch();
         const ago = Math.floor((Date.now() - cached.time) / 60000);
         statusEl.textContent = 'Cached ' + (ago < 1 ? 'just now' : ago + 'm ago');
@@ -24891,10 +24680,10 @@ async function _updateGridPane(name) {
   const dot  = document.getElementById(sid + '-dot');
   if (!body) { removeGridPane(name); return; }
   try {
-    const data = await fetch(API + '/api/sessions/' + encodeURIComponent(name) + '/peek?full=1').then(r => r.json());
+    const data = await fetch(API + '/api/sessions/' + encodeURIComponent(name) + '/peek?lines=500').then(r => r.json());
     const atBottom = _isScrolledToBottom(body);
     const locked = body._scrollLocked;
-    body.innerHTML = renderCCStream(stripAnsi(data.output || ''));
+    body.innerHTML = linkifyOutput(stripAnsi(data.output || ''));
     if (!locked && atBottom) {
       body.scrollTop = body.scrollHeight;
       _hideScrollLockBadge(body);
@@ -36475,12 +36264,8 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
             if action == "peek":
                 full = qs.get("full", ["0"])[0] in ("1", "true", "yes")
                 if full:
-                    # Return the entire saved log so the client can render the
-                    # full session transcript (capped at MAX_LOG_BYTES = 10MB).
                     saved = load_session_log(name)
                     if saved:
-                        # Also fold in the latest tmux pane so we don't lag
-                        # behind unsaved output from a live session.
                         live = tmux_capture(name, 200)
                         if live and live.strip() and not saved.endswith(live[-200:]):
                             threading.Thread(target=save_session_log, args=(name, live), daemon=True).start()

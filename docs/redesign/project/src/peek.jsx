@@ -2,6 +2,107 @@
 
 const { useState: useStateP, useEffect: useEffectP, useRef: useRefP, useMemo: useMemoP } = React;
 
+/* ── Claude-Code transcript renderer (cc-stream) ────────────────
+   Heuristic line-walker that turns raw tmux Claude Code output into
+   structured HTML — user pills, tool calls (● Name(args) + ⎿ result),
+   status footers, prose, blanks. Ported from the legacy dashboard so
+   /redesign shares the same render. */
+function _ccEsc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function _ccLinkify(text) {
+  const urlRe = /(https?:\/\/[^\s<>'"`,;]+)/g;
+  const out = [];
+  let last = 0;
+  let m;
+  while ((m = urlRe.exec(text)) !== null) {
+    out.push(_ccEsc(text.slice(last, m.index)));
+    const url = m[1];
+    out.push(`<a href="${_ccEsc(url)}" target="_blank" rel="noreferrer">${_ccEsc(url)}</a>`);
+    last = m.index + m[0].length;
+  }
+  out.push(_ccEsc(text.slice(last)));
+  return out.join('');
+}
+function _ccStripAnsi(text) {
+  return String(text)
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+    .replace(/\x1b\][^\x07]*\x07/g, '');
+}
+function renderCCStream(rawText) {
+  const text = rawText == null ? '' : String(rawText);
+  if (!text.trim()) return '<div class="cc-stream"></div>';
+  const lines = text.split('\n');
+  const out = ['<div class="cc-stream">'];
+  const toolHead = /^[\s]*[●•▶○]\s+([A-Za-z][\w.\-]*)\(([\s\S]*)\)\s*$/;
+  const toolCont = /^\s*(?:⎿|└|⌐)\s?(.*)$/;
+  const indented = /^(?:    |\t|  ⎿|  └)/;
+  let i = 0;
+  let consecutiveBlanks = 0;
+  while (i < lines.length) {
+    const line = lines[i].replace(/\r$/, '');
+    if (!line.trim()) {
+      if (consecutiveBlanks === 0) out.push('<span class="cc-blank"></span>');
+      consecutiveBlanks++;
+      i++;
+      continue;
+    }
+    consecutiveBlanks = 0;
+    const userM = /^>\s+(\S.*)$/.exec(line);
+    if (userM) {
+      out.push('<div class="cc-userpill"><span class="chev">›</span>'
+        + _ccLinkify(userM[1]) + '</div>');
+      i++;
+      continue;
+    }
+    if (/^[\s]*✻\s/.test(line)) {
+      const rest = line.replace(/^\s*✻\s*/, '');
+      out.push('<div class="cc-status"><span class="star">✻</span>'
+        + _ccLinkify(rest) + '</div>');
+      i++;
+      continue;
+    }
+    const tm = toolHead.exec(line);
+    if (tm) {
+      const name = tm[1];
+      const args = tm[2];
+      const contLines = [];
+      let j = i + 1;
+      while (j < lines.length) {
+        const nxt = lines[j].replace(/\r$/, '');
+        if (!nxt.trim()) break;
+        const cm = toolCont.exec(nxt);
+        if (cm) { contLines.push(cm[1]); j++; continue; }
+        if (indented.test(nxt)) { contLines.push(nxt.replace(/^\s+/, '')); j++; continue; }
+        break;
+      }
+      let head = '<div class="cc-tool"><div class="cc-tool__head">'
+        + '<span class="cc-dot" data-state="ok" aria-hidden="true"></span>'
+        + '<span><span class="cc-tool__name">' + _ccEsc(name) + '</span>'
+        + '<span class="cc-tool__args">'
+        + '<span class="arg-paren">(</span>' + _ccLinkify(args) + '<span class="arg-paren">)</span>'
+        + '</span></span></div>';
+      if (contLines.length) {
+        head += '<div class="cc-tool__result">'
+          + '<span class="cc-tool__cont" aria-hidden="true">└</span>'
+          + '<div class="cc-tool__body"><div class="cc-lines">'
+          + contLines.map(l => '<span class="ln">' + _ccLinkify(l) + '</span>').join('')
+          + '</div></div></div>';
+      }
+      head += '</div>';
+      out.push(head);
+      i = j;
+      continue;
+    }
+    out.push('<div class="cc-prose">' + _ccLinkify(line) + '</div>');
+    i++;
+  }
+  out.push('</div>');
+  return out.join('');
+}
+
 function PeekPanel({ name, onClose }) {
   const s = store.sessions.find((x) => x.name === name);
   const [tab, setTab] = useStateP("output");
@@ -33,9 +134,30 @@ function PeekPanel({ name, onClose }) {
   const [queued, setQueued] = useStateP([]);
   const outRef = useRefP(null);
 
+  /* Full Claude Code transcript — fetched from ?full=1, rendered via cc-stream. */
+  const [fullOutput, setFullOutput] = useStateP('');
+  const [outputLoading, setOutputLoading] = useStateP(false);
+
+  useEffectP(() => {
+    if (tab !== 'output' || !s?.name) return;
+    let cancelled = false;
+    setOutputLoading(true);
+    fetch(`/api/sessions/${encodeURIComponent(s.name)}/peek?full=1`, { headers: API_HEADERS })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(j => { if (!cancelled) setFullOutput(j?.output || ''); })
+      .catch(() => { /* network blip — keep previous output */ })
+      .finally(() => { if (!cancelled) setOutputLoading(false); });
+    return () => { cancelled = true; };
+  }, [s?.name, s?.previewBump, tab]);
+
+  const ccHTML = useMemoP(
+    () => renderCCStream(_ccStripAnsi(fullOutput)),
+    [fullOutput]
+  );
+
   useEffectP(() => {
     if (outRef.current) outRef.current.scrollTop = outRef.current.scrollHeight;
-  }, [s?.previewBump, tab]);
+  }, [ccHTML, tab]);
 
   const matches = useMemoP(() => {
     if (!query.trim() || !s?.preview) return [];
@@ -192,18 +314,14 @@ function PeekPanel({ name, onClose }) {
           <div style={{ flex: 1, overflow: 'auto', padding: '14px 16px' }}>
             {tab === "output" && (
               <div className="peek__output" ref={outRef}>
-                <div>{`╭─ ${s.cwd || '?'} ${s.branch ? 'on ' + s.branch + ' ' : ''}─ ${s.provider}${s.model ? '/' + s.model : ''}`}</div>
-                <div>│</div>
-                {(s.preview && s.preview.length > 0) ? s.preview.map((line, i) => {
-                  const isMatch = matches.includes(i);
-                  const isActive = isMatch && matches[activeMatch] === i;
-                  let cls = '';
-                  if (isActive) cls = 'line--match line--match-active';
-                  else if (isMatch) cls = 'line--match';
-                  return (
-                    <div key={i} data-idx={i} className={cls || undefined}>{line || ' '}</div>
-                  );
-                }) : (
+                <div className="dim" style={{ fontSize: 11, marginBottom: 4 }}>
+                  {`╭─ ${s.cwd || '?'} ${s.branch ? 'on ' + s.branch + ' ' : ''}─ ${s.provider}${s.model ? '/' + s.model : ''}`}
+                </div>
+                {fullOutput ? (
+                  <div dangerouslySetInnerHTML={{ __html: ccHTML }} />
+                ) : outputLoading ? (
+                  <div className="dim">loading transcript…</div>
+                ) : (
                   <div className="dim">no recent output — try sending a message below</div>
                 )}
                 <div style={{ marginTop: 10 }}>
