@@ -133,6 +133,7 @@ function PeekPanel({ name, onClose }) {
 
   const [queued, setQueued] = useStateP([]);
   const outRef = useRefP(null);
+  const scrollRef = useRefP(null);
 
   /* Full Claude Code transcript — fetched from ?full=1, rendered via cc-stream. */
   const [fullOutput, setFullOutput] = useStateP('');
@@ -155,9 +156,17 @@ function PeekPanel({ name, onClose }) {
     [fullOutput]
   );
 
+  /* Always snap to bottom after every transcript update so the latest
+     Claude Code output is visible without manual scrolling. rAF gives
+     dangerouslySetInnerHTML a tick to lay out before we measure. */
   useEffectP(() => {
-    if (outRef.current) outRef.current.scrollTop = outRef.current.scrollHeight;
-  }, [ccHTML, tab]);
+    if (tab !== 'output') return;
+    const id = requestAnimationFrame(() => {
+      const el = scrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+    return () => cancelAnimationFrame(id);
+  }, [ccHTML, tab, fullscreen]);
 
   const matches = useMemoP(() => {
     if (!query.trim() || !s?.preview) return [];
@@ -311,7 +320,7 @@ function PeekPanel({ name, onClose }) {
             </div>
           )}
 
-          <div style={{ flex: 1, overflow: 'auto', padding: '14px 16px' }}>
+          <div ref={scrollRef} style={{ flex: 1, overflow: 'auto', padding: '14px 16px' }}>
             {tab === "output" && (
               <div className="peek__output" ref={outRef}>
                 <div className="dim" style={{ fontSize: 11, marginBottom: 4 }}>
