@@ -191,6 +191,29 @@ function PeekPanel({ name, onClose }) {
   const [notesText, setNotesText] = useStateP("");
   const fileInputRef = useRefP(null);
 
+  /* QuickKey "send directly" arming.
+     First click on a /cmd button inserts the text + arms that button with
+     a transient "Send directly" overlay. Second click on the same armed
+     button (or a native double-click, which fires two clicks) sends the
+     command immediately, bypassing the composer. Any of these disarm:
+       - typing in the composer
+       - clicking outside the qkeys row
+       - switching tab/session
+       - sending or queueing via the Send/Queue buttons or ⌘↵ / ⌘⇧↵
+       - pressing any non-cmd qkey                                       */
+  const [armedQk, setArmedQk] = useStateP(null);
+  const qkeysRef = useRefP(null);
+
+  useEffectP(() => { setArmedQk(null); }, [s?.name, tab]);
+  useEffectP(() => {
+    if (armedQk == null) return;
+    function onDown(e) {
+      if (qkeysRef.current && !qkeysRef.current.contains(e.target)) setArmedQk(null);
+    }
+    window.addEventListener('mousedown', onDown, true);
+    return () => window.removeEventListener('mousedown', onDown, true);
+  }, [armedQk]);
+
   useEffectP(() => {
     function onKey(e) {
       if (['INPUT','TEXTAREA'].includes(document.activeElement?.tagName)) return;
@@ -274,6 +297,7 @@ function PeekPanel({ name, onClose }) {
   async function send() {
     const text = composer.trim();
     if (!text) return;
+    setArmedQk(null);
     if (steerMode) {
       pushToast(`Steer set for ${s.name}`);
       setComposer("");
@@ -299,6 +323,25 @@ function PeekPanel({ name, onClose }) {
     setQueued((q) => [...q, composer]);
     pushToast(`Queued for ${s.name}`);
     setComposer("");
+    setArmedQk(null);
+  }
+
+  /* Send a /cmd directly (used when its qkey is double-clicked or
+     armed-then-clicked-again). Bypasses the composer. */
+  async function sendCmdDirect(cmdText) {
+    setArmedQk(null);
+    patchSession(s.name, {
+      preview: [...s.preview.slice(-1), `> ${cmdText}`, "thinking…"],
+      previewBump: Date.now(),
+      status: "active",
+      last_activity: Date.now()
+    });
+    try {
+      await sendToSession(s.name, cmdText);
+      pushToast(`Sent ${cmdText} to ${s.name}`);
+    } catch (err) {
+      pushToast(`Send failed: ${err.message}`, 'error');
+    }
   }
 
   async function openHistory() {
@@ -561,8 +604,12 @@ function PeekPanel({ name, onClose }) {
 
       {tab === "output" && (
         <div className="peek__composer">
-          <QuickKeys onPress={async (payload) => {
+          <QuickKeys
+            armedIdx={armedQk}
+            qkeysRef={qkeysRef}
+            onPress={async (payload, idx) => {
             if (payload.kind === 'key') {
+              setArmedQk(null);
               const KEY_MAP = {
                 'Esc': 'escape', '↑': 'up', '↓': 'down', '←': 'left', '→': 'right',
                 'Tab': 'tab', '⇧Tab': 'shift-tab', '↵': 'enter',
@@ -581,8 +628,17 @@ function PeekPanel({ name, onClose }) {
                 }
               }
             } else if (payload.kind === 'cmd') {
-              setComposer((c) => (c ? c.replace(/\s*$/, ' ') : '') + payload.text + ' ');
+              if (armedQk === idx) {
+                // Second click on the armed qkey (or 2nd of a native dblclick):
+                // send the command directly, bypass composer.
+                await sendCmdDirect(payload.text);
+              } else {
+                // First click: insert into composer and arm.
+                setComposer((c) => (c ? c.replace(/\s*$/, ' ') : '') + payload.text + ' ');
+                setArmedQk(idx);
+              }
             } else if (payload.kind === 'text') {
+              setArmedQk(null);
               setComposer((c) => (c ? c + ' ' : '') + payload.text);
             }
           }} />
@@ -590,7 +646,7 @@ function PeekPanel({ name, onClose }) {
             className="composer__area"
             placeholder={steerMode ? "Steer hint (injected on next tool call)…" : "Send a message…   ⌘↵ to send"}
             value={composer}
-            onChange={(e) => setComposer(e.target.value)}
+            onChange={(e) => { setComposer(e.target.value); if (armedQk != null) setArmedQk(null); }}
             onKeyDown={(e) => {
               if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'Enter') { e.preventDefault(); queue(); }
               else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); send(); }
@@ -665,8 +721,10 @@ function PeekPanel({ name, onClose }) {
 window.PeekPanel = PeekPanel;
 
 /* QuickKeys — pressable row of keycaps above composer.
-   Each item: { label, icon?, kind: 'key'|'cmd'|'text', text?, variant? } */
-function QuickKeys({ onPress }) {
+   Each item: { label, icon?, kind: 'key'|'cmd'|'text', text?, variant? }
+   armedIdx: index of a cmd button that is "armed" (next click sends directly).
+   qkeysRef:   parent ref so outside-click detection can target this row. */
+function QuickKeys({ onPress, armedIdx, qkeysRef }) {
   const t = window.AppTweaks || {};
   if (t.showQuickKeys === false) return null;
 
@@ -688,17 +746,22 @@ function QuickKeys({ onPress }) {
   ];
 
   return (
-    <div className="qkeys" role="toolbar" aria-label="Quick keys">
-      {KEYS.map((k, i) => (
-        <button
-          key={i}
-          type="button"
-          className={`qkey${k.variant ? ` qkey--${k.variant}` : ''}`}
-          title={k.hint || k.text || k.label}
-          onClick={() => onPress(k)}>
-          {k.label}
-        </button>
-      ))}
+    <div className="qkeys" role="toolbar" aria-label="Quick keys" ref={qkeysRef}>
+      {KEYS.map((k, i) => {
+        const armed = armedIdx === i && k.kind === 'cmd';
+        return (
+          <button
+            key={i}
+            type="button"
+            className={`qkey${k.variant ? ` qkey--${k.variant}` : ''}${armed ? ' qkey--armed' : ''}`}
+            title={armed ? `Click again to send ${k.text} directly` : (k.hint || k.text || k.label)}
+            aria-pressed={armed || undefined}
+            onClick={() => onPress(k, i)}>
+            <span className="qkey__label">{k.label}</span>
+            {armed && <span className="qkey__send" aria-hidden="true">Send directly ↵</span>}
+          </button>
+        );
+      })}
     </div>
   );
 }
