@@ -400,7 +400,6 @@ function SettingsTab() {
             <div><span className="dim">Auth</span><span className="mono">{(window.AMUX_AUTH || '').slice(0, 8) || 'localhost'}…</span></div>
             <div><span className="dim">SSE</span><span>{store.connection}</span></div>
             <div><span className="dim">Sessions</span><span>{store.sessions.length}</span></div>
-            <div><span className="dim">Server</span><span><a href="/legacy" className="faint">open legacy view ↗</a></span></div>
           </div>
           <div style={{marginTop:10}}>
             <button className="btn btn--ghost" style={{minHeight:36, fontSize:12}} onClick={openDevtools}>

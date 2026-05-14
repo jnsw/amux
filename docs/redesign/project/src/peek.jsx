@@ -499,9 +499,6 @@ function PeekPanel({ name, onClose, onSwitch }) {
                 ) : (
                   <div className="dim">no recent output — try sending a message below</div>
                 )}
-                <div style={{ marginTop: 10 }}>
-                  <a href={`/legacy?session=${encodeURIComponent(s.name)}`} target="_blank" rel="noreferrer" className="faint" style={{ fontSize: 11 }}>open full transcript in legacy view ↗</a>
-                </div>
               </div>
             )}
 
